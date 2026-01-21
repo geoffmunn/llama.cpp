@@ -293,16 +293,17 @@ typedef struct {
         } GGML_COMMON_AGGR_S;
         ggml_half2 dm;
     } GGML_COMMON_AGGR_U;
-    // === RESIDUAL CORRECTION EXTENSION (50 bytes) ===
+    // === RESIDUAL CORRECTION EXTENSION (52 bytes) ===
     uint8_t outlier_count;                      // 1 byte: actual outliers stored (0-16)
     uint8_t _pad;                               // 1 byte: alignment padding
     uint8_t outlier_idx[Q2_K_HIFI_OUTLIERS];    // 16 bytes: outlier positions (0-255)
     ggml_half outlier_vals[Q2_K_HIFI_OUTLIERS]; // 32 bytes: FP16 residual corrections
+    uint8_t _pad2[2];                           // 2 bytes: tail padding for 4-byte struct alignment
 } block_q2_k_hifi;
-// Size: 84 (Q2_K) + 2 (count+pad) + 16 (idx) + 32 (vals) = 134 bytes
-// BPW: 134 * 8 / 256 = 4.1875 bpw for enhanced blocks
+// Size: 84 (Q2_K) + 2 (count+pad) + 16 (idx) + 32 (vals) + 2 (tail pad) = 136 bytes
+// BPW: 136 * 8 / 256 = 4.25 bpw for enhanced blocks
 // Effective BPW ~2.6-2.8 when only 15-25% of tensors are enhanced
-static_assert(sizeof(block_q2_k_hifi) == sizeof(block_q2_K) + 2 + Q2_K_HIFI_OUTLIERS + Q2_K_HIFI_OUTLIERS*sizeof(ggml_half), "wrong q2_k_hifi block size/padding");
+static_assert(sizeof(block_q2_k_hifi) == sizeof(block_q2_K) + 4 + Q2_K_HIFI_OUTLIERS + Q2_K_HIFI_OUTLIERS*sizeof(ggml_half), "wrong q2_k_hifi block size/padding");
 
 // 3-bit quantization
 // weight is represented as x = a * q
