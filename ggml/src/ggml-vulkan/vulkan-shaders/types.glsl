@@ -256,6 +256,40 @@ struct block_q2_K_packed32
 #define DATA_A_QUANT_K
 #endif
 
+// Q2_K_HIFI: Q2_K with 16 FP16 residual corrections for aggressive 2-bit quantization
+#define QUANT_K_Q2_K_HIFI 256
+#define Q2_K_HIFI_OUTLIERS 16
+
+struct block_q2_k_hifi
+{
+    uint8_t scales[QUANT_K_Q2_K_HIFI/16];    // 16 bytes
+    uint8_t qs[QUANT_K_Q2_K_HIFI/4];         // 64 bytes
+    f16vec2 dm;                              // 4 bytes
+    uint8_t outlier_count;                   // 1 byte: actual outliers stored
+    uint8_t _pad;                            // 1 byte: alignment
+    uint8_t outlier_idx[Q2_K_HIFI_OUTLIERS]; // 16 bytes
+    float16_t outlier_vals[Q2_K_HIFI_OUTLIERS]; // 32 bytes
+};
+
+struct block_q2_k_hifi_packed16
+{
+    uint16_t scales[QUANT_K_Q2_K_HIFI/16/2];
+    uint16_t qs[QUANT_K_Q2_K_HIFI/4/2];
+    f16vec2 dm;
+    uint8_t outlier_count;
+    uint8_t _pad;
+    uint16_t outlier_idx[Q2_K_HIFI_OUTLIERS/2];
+    float16_t outlier_vals[Q2_K_HIFI_OUTLIERS];
+};
+
+#if defined(DATA_A_Q2_K_HIFI)
+#define QUANT_K QUANT_K_Q2_K_HIFI
+#define QUANT_R 1
+#define A_TYPE block_q2_k_hifi
+#define A_TYPE_PACKED16 block_q2_k_hifi_packed16
+#define DATA_A_QUANT_K
+#endif
+
 #define QUANT_K_Q3_K 256
 
 struct block_q3_K

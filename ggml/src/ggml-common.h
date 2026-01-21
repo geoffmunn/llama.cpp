@@ -276,6 +276,34 @@ typedef struct {
 } block_q2_K;
 static_assert(sizeof(block_q2_K) == 2*sizeof(ggml_half) + QK_K/16 + QK_K/4, "wrong q2_K block size/padding");
 
+// Q2_K_HIFI: Q2_K with FP16 residual correction for aggressive 2-bit quantization
+// Uses residual-based outlier selection to correct weights Q2_K fails on
+// 16 outliers provide meaningful correction at minimal BPW overhead (~2.6 bpw total)
+// Best for 4B+ models where 2-bit base needs outlier support
+#define Q2_K_HIFI_BLOCK_SIZE 256
+#define Q2_K_HIFI_OUTLIERS   16
+typedef struct {
+    // === Q2_K-COMPATIBLE REGION (84 bytes) - DO NOT REORDER ===
+    uint8_t scales[QK_K/16];       // 16 bytes: scales and mins, quantized with 4 bits
+    uint8_t qs[QK_K/4];            // 64 bytes: quants (2-bit)
+    GGML_EXTENSION union {
+        struct {
+            ggml_half d;           // super-block scale for quantized scales
+            ggml_half dmin;        // super-block scale for quantized mins
+        } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    // === RESIDUAL CORRECTION EXTENSION (50 bytes) ===
+    uint8_t outlier_count;                      // 1 byte: actual outliers stored (0-16)
+    uint8_t _pad;                               // 1 byte: alignment padding
+    uint8_t outlier_idx[Q2_K_HIFI_OUTLIERS];    // 16 bytes: outlier positions (0-255)
+    ggml_half outlier_vals[Q2_K_HIFI_OUTLIERS]; // 32 bytes: FP16 residual corrections
+} block_q2_k_hifi;
+// Size: 84 (Q2_K) + 2 (count+pad) + 16 (idx) + 32 (vals) = 134 bytes
+// BPW: 134 * 8 / 256 = 4.1875 bpw for enhanced blocks
+// Effective BPW ~2.6-2.8 when only 15-25% of tensors are enhanced
+static_assert(sizeof(block_q2_k_hifi) == sizeof(block_q2_K) + 2 + Q2_K_HIFI_OUTLIERS + Q2_K_HIFI_OUTLIERS*sizeof(ggml_half), "wrong q2_k_hifi block size/padding");
+
 // 3-bit quantization
 // weight is represented as x = a * q
 // 16 blocks of 16 elements each

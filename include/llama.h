@@ -156,6 +156,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q4_K_HIFI     = 44, // Q4_K_M + 2-8 dynamic outliers + early exit (best quality/size ratio)
         LLAMA_FTYPE_MOSTLY_Q3_K_HIFI     = 45, // Q3_K_M base + Q6_K_HIFI on critical tensors
         LLAMA_FTYPE_MOSTLY_Q5_K_HIFI     = 46, // Q5_K_M base + Q6_K_HIFI_RES8 on top 10-15% tensors (best 5-bit quality)
+        LLAMA_FTYPE_MOSTLY_Q2_K_HIFI     = 47, // Q2_K base + 16 FP16 outliers for aggressive 2-bit (~2.6-2.8 bpw)
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
