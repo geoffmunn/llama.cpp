@@ -276,24 +276,25 @@ static ggml_type get_q3_hifi_ffn_down_type(float model_params_b, int i_layer, in
 // ===========================================================================
 
 // Determine if model size is appropriate for Q2_K_HIFI enhancement
-// Small models (<4B): Q2_K already struggles, HIFI overhead may not help
-// Medium models (4-10B): Sweet spot for Q2_K_HIFI
+// Small models (<1B): Still apply HIFI for testing/quality at extreme compression
+// Medium models (1-10B): Sweet spot for Q2_K_HIFI
 // Large models (14B+): Some benefit but diminishing returns
 static bool should_use_q2_k_hifi(float model_params_b) {
-    // Models < 4B: Q2_K_HIFI overhead may not be worth it
-    // At extreme compression, small models lose too much information
-    if (model_params_b < 4.0f) {
-        return false;
-    }
+    // Always allow Q2_K_HIFI - even small models can benefit from residual corrections
+    // The overhead is justified when quality at low BPW is the priority
+    (void)model_params_b;  // Suppress unused warning
     return true;
 }
 
 // Get the percentage of tensors to enhance for Q2_K_HIFI
 // This controls what fraction of Q2_K tensors get upgraded to Q2_K_HIFI
 static float get_q2_hifi_enhancement_threshold(float model_params_b) {
-    if (model_params_b < 4.0f) {
-        // Small models: no enhancement (use pure Q2_K)
-        return 0.0f;
+    if (model_params_b < 1.0f) {
+        // Tiny models (<1B): Higher enhancement - they need more help
+        return 0.35f;
+    } else if (model_params_b < 4.0f) {
+        // Small models (1-4B): Good enhancement
+        return 0.30f;
     } else if (model_params_b <= 7.0f) {
         // 4-7B: Moderate enhancement - best ROI
         return 0.25f;
