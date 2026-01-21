@@ -269,6 +269,7 @@ struct block_q2_k_hifi
     uint8_t _pad;                            // 1 byte: alignment
     uint8_t outlier_idx[Q2_K_HIFI_OUTLIERS]; // 16 bytes
     float16_t outlier_vals[Q2_K_HIFI_OUTLIERS]; // 32 bytes
+    uint8_t _pad2[2];                        // 2 bytes: tail padding for 4-byte alignment
 };
 
 struct block_q2_k_hifi_packed16
@@ -280,6 +281,7 @@ struct block_q2_k_hifi_packed16
     uint8_t _pad;
     uint16_t outlier_idx[Q2_K_HIFI_OUTLIERS/2];
     float16_t outlier_vals[Q2_K_HIFI_OUTLIERS];
+    uint8_t _pad2[2];
 };
 
 #if defined(DATA_A_Q2_K_HIFI)

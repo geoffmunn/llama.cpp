@@ -896,8 +896,8 @@ void dequantize_q2_k_hifi(device const block_q2_k_hifi * xb, short il, thread ty
     // For template-based matmul kernels, we use simplified dequantization
     // Outliers are handled at the kernel level (see kernel_mul_mv_q2_k_hifi_f32_impl)
     // This matches Q2_K dequantization exactly since the base layout is identical
-    const float d = xb->dm.x;
-    const float min = xb->dm.y;
+    const float d = xb->d;
+    const float min = xb->dmin;
     device const uint8_t * q = (device const uint8_t *)xb->qs;
     float dl, ml;
     uint8_t sc = xb->scales[il];
@@ -7157,7 +7157,7 @@ void kernel_mul_mv_q2_k_hifi_f32_impl(
 
         device const uint8_t  * sc = (device const uint8_t  *)x[ib].scales + 8*iq + is;
         device const uint16_t * qs = (device const uint16_t *)x[ib].qs + 16 * iq + 4 * ir;
-        device const half     * dh = &x[ib].dm.x;
+        device const half     * dh = &x[ib].d;
 
         for (short row = 0; row < nr0; row++) {
             float4 acc1 = {0.f, 0.f, 0.f, 0.f};

@@ -1599,6 +1599,8 @@ void quantize_row_q2_k_hifi_ref(const float * GGML_RESTRICT x, block_q2_k_hifi *
         // Step 6: Store residual corrections (FP16)
         block->outlier_count = Q2_K_HIFI_OUTLIERS;
         block->_pad = 0;
+        block->_pad2[0] = 0;
+        block->_pad2[1] = 0;
         for (int k_idx = 0; k_idx < Q2_K_HIFI_OUTLIERS; ++k_idx) {
             const int idx = outlier_indices[k_idx];
             block->outlier_idx[k_idx] = (uint8_t)idx;
@@ -1658,6 +1660,8 @@ void quantize_row_q2_k_hifi_ref_weighted(const float * GGML_RESTRICT x, block_q2
         // Step 6: Store residual corrections (FP16)
         block->outlier_count = Q2_K_HIFI_OUTLIERS;
         block->_pad = 0;
+        block->_pad2[0] = 0;
+        block->_pad2[1] = 0;
         for (int k_idx = 0; k_idx < Q2_K_HIFI_OUTLIERS; ++k_idx) {
             const int idx = outlier_indices[k_idx];
             block->outlier_idx[k_idx] = (uint8_t)idx;

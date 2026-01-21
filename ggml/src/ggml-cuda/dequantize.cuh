@@ -76,6 +76,57 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
     v.y *= d;
 }
 
+// Q2_K_HIFI: Q2_K layout + 16 FP16 residual corrections per block
+// Uses same scales/qs layout as Q2_K for the first 84 bytes
+// Residuals ADD to the Q2_K value (don't replace)
+static __device__ __forceinline__ void dequantize_q2_k_hifi(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_q2_k_hifi * x = (const block_q2_k_hifi *) vx;
+
+    // Q2_K-style dequantization
+    const float2 dm2f = __half22float2(x[ib].dm);
+    const float d = dm2f.x;
+    const float min = dm2f.y;
+
+    const uint8_t * qs = x[ib].qs;
+
+    // iqs is in range [0, QK_K/2) = [0, 128)
+    // We need to extract 2 values at positions iqs*2 and iqs*2+1
+    int idx0 = iqs * 2;
+    int idx1 = iqs * 2 + 1;
+
+    // Q2_K bit layout: 4 values packed per byte (2 bits each)
+    // scales[16]: scale and min for each 16-weight sub-block
+    const int qs_byte0 = idx0 / 4;
+    const int qs_shift0 = (idx0 % 4) * 2;
+    const int quant0 = (qs[qs_byte0] >> qs_shift0) & 0x03;
+    const int scale_idx0 = idx0 / 16;
+    const uint8_t sc0 = x[ib].scales[scale_idx0];
+    const float d0 = d * (sc0 & 0xF);
+    const float m0 = min * (sc0 >> 4);
+
+    const int qs_byte1 = idx1 / 4;
+    const int qs_shift1 = (idx1 % 4) * 2;
+    const int quant1 = (qs[qs_byte1] >> qs_shift1) & 0x03;
+    const int scale_idx1 = idx1 / 16;
+    const uint8_t sc1 = x[ib].scales[scale_idx1];
+    const float d1 = d * (sc1 & 0xF);
+    const float m1 = min * (sc1 >> 4);
+
+    v.x = d0 * quant0 - m0;
+    v.y = d1 * quant1 - m1;
+
+    // ADD residual corrections (not replace!)
+    const int n_outliers = (x[ib].outlier_count <= Q2_K_HIFI_OUTLIERS) ? x[ib].outlier_count : Q2_K_HIFI_OUTLIERS;
+    for (int k = 0; k < n_outliers; ++k) {
+        if (x[ib].outlier_idx[k] == idx0) {
+            v.x += __half2float(x[ib].outlier_vals[k]);  // ADD correction
+        }
+        if (x[ib].outlier_idx[k] == idx1) {
+            v.y += __half2float(x[ib].outlier_vals[k]);  // ADD correction
+        }
+    }
+}
+
 // Q3_K_HIFI: Q3_K layout + 16 FP16 residual corrections
 // Uses same hmask/qs/scales layout as Q3_K for the first 110 bytes
 // Residuals ADD to the Q3_K value (don't replace)
