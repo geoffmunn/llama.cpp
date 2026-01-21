@@ -6463,6 +6463,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             {
                 VALIDATE_ROW_DATA_DM_F16_IMPL(block_q2_K, data, nb, d, dmin);
             } break;
+        case GGML_TYPE_Q2_K_HIFI:
+            {
+                VALIDATE_ROW_DATA_DM_F16_IMPL(block_q2_k_hifi, data, nb, d, dmin);
+            } break;
         case GGML_TYPE_Q3_K:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_q3_K, data, nb);
