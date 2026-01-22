@@ -709,14 +709,14 @@ static __global__ void dequantize_block_q2_k_hifi(const void * __restrict__ vx, 
     // Sync before applying outlier corrections (only one thread per block does this)
     __syncthreads();
 
-    // Thread 0 applies the outlier REPLACEMENTS
+    // Thread 0 applies the outlier residual ADDITIONS
     if (tid == 0) {
         dst_t * yb = yy + i*QK_K;
         const int n_outliers = x[i].outlier_count <= Q2_K_HIFI_OUTLIERS ? x[i].outlier_count : Q2_K_HIFI_OUTLIERS;
         for (int k_idx = 0; k_idx < n_outliers; ++k_idx) {
             const int idx = x[i].outlier_idx[k_idx];
             if (idx < QK_K) {
-                yb[idx] = __half2float(x[i].outlier_vals[k_idx]);  // REPLACE, not add
+                yb[idx] += __half2float(x[i].outlier_vals[k_idx]);  // ADD residual
             }
         }
     }

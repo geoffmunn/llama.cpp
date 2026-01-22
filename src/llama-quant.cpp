@@ -914,10 +914,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     // === Q2_K_HIFI: Model-size adaptive tensor upgrade ===
     // For 2-bit quantization, HIFI correction is especially valuable since Q2_K has
     // significant quantization error.
-    // NOTE: For testing, we enable HIFI on ALL model sizes. In production, you may want
-    // to disable for tiny models (<1B) where overhead outweighs benefits.
+    // NOTE: Currently enhancing ALL Q2_K tensors. After validating the vec_dot fix,
+    // we can add selective enhancement based on tensor importance.
     if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI && new_type == GGML_TYPE_Q2_K) {
-        // Always use HIFI for Q2_K_HIFI quantization - let users decide via ftype choice
         new_type = GGML_TYPE_Q2_K_HIFI;
     }
 
@@ -1192,6 +1191,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     size_t total_size_org = 0;
     size_t total_size_new = 0;
+    
+    // Q2_K_HIFI enhancement tracking
+    int n_q2k_base = 0;
+    int n_q2k_hifi = 0;
 
     std::vector<std::thread> workers;
     workers.reserve(nthread);
@@ -1377,6 +1380,13 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // If we've decided to quantize to the same type the tensor is already
             // in then there's nothing to do.
             quantize = tensor->type != new_type;
+            
+            // Track Q2_K_HIFI enhancement ratio
+            if (new_type == GGML_TYPE_Q2_K) {
+                n_q2k_base++;
+            } else if (new_type == GGML_TYPE_Q2_K_HIFI) {
+                n_q2k_hifi++;
+            }
         }
 
         if (!quantize) {
@@ -1575,6 +1585,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     LLAMA_LOG_INFO("%s: model size  = %8.2f MiB\n", __func__, total_size_org/1024.0/1024.0);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MiB\n", __func__, total_size_new/1024.0/1024.0);
+    
+    // Report Q2_K_HIFI statistics
+    if (n_q2k_hifi > 0) {
+        LLAMA_LOG_INFO("%s: Q2_K_HIFI tensors: %d (Q2_K base: %d)\n", 
+                       __func__, n_q2k_hifi, n_q2k_base);
+    }
 
     if (qs.n_fallback > 0) {
         LLAMA_LOG_WARN("%s: WARNING: %d of %d tensor(s) required fallback quantization\n",

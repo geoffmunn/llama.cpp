@@ -1491,14 +1491,20 @@ void quantize_row_q2_k_hifi_ref(const float * GGML_RESTRICT x, block_q2_k_hifi *
         block->d = q2k_block.d;
         block->dmin = q2k_block.dmin;
 
-        // Step 5: Store outlier indices and ORIGINAL values (not residuals!)
+        // Step 5: Dequantize Q2_K to compute what it actually produces
+        float x_recon[Q2_K_HIFI_BLOCK_SIZE];
+        dequantize_row_q2_K(&q2k_block, x_recon, Q2_K_HIFI_BLOCK_SIZE);
+
+        // Step 6: Store outlier indices and RESIDUALS (original - reconstruction)
+        // This ensures vec_dot can ADD residuals and get correct result
         block->outlier_count = Q2_K_HIFI_OUTLIERS;
         block->_pad = 0;
         for (int k_idx = 0; k_idx < Q2_K_HIFI_OUTLIERS; ++k_idx) {
             const int idx = outlier_indices[k_idx];
             block->outlier_idx[k_idx] = (uint8_t)idx;
-            // Store ORIGINAL value - will be used to REPLACE during dequant
-            block->outlier_vals[k_idx] = GGML_FP32_TO_FP16(xb[idx]);
+            // Store RESIDUAL = original - reconstruction (for ADD semantics in dequant & vec_dot)
+            const float residual = xb[idx] - x_recon[idx];
+            block->outlier_vals[k_idx] = GGML_FP32_TO_FP16(residual);
         }
     }
 }
@@ -1554,14 +1560,20 @@ static void quantize_row_q2_k_hifi_impl(const float * GGML_RESTRICT x, block_q2_
         block->d = q2k_block.d;
         block->dmin = q2k_block.dmin;
 
-        // Step 5: Store outlier indices and ORIGINAL values (not residuals!)
+        // Step 5: Dequantize Q2_K to compute what it actually produces
+        float x_recon[Q2_K_HIFI_BLOCK_SIZE];
+        dequantize_row_q2_K(&q2k_block, x_recon, Q2_K_HIFI_BLOCK_SIZE);
+
+        // Step 6: Store outlier indices and RESIDUALS (original - reconstruction)
+        // This ensures vec_dot can ADD residuals and get correct result
         block->outlier_count = Q2_K_HIFI_OUTLIERS;
         block->_pad = 0;
         for (int k_idx = 0; k_idx < Q2_K_HIFI_OUTLIERS; ++k_idx) {
             const int idx = outlier_indices[k_idx];
             block->outlier_idx[k_idx] = (uint8_t)idx;
-            // Store ORIGINAL value - will be used to REPLACE during dequant
-            block->outlier_vals[k_idx] = GGML_FP32_TO_FP16(xb[idx]);
+            // Store RESIDUAL = original - reconstruction (for ADD semantics in dequant & vec_dot)
+            const float residual = xb[idx] - x_recon[idx];
+            block->outlier_vals[k_idx] = GGML_FP32_TO_FP16(residual);
         }
     }
 }
@@ -1578,13 +1590,13 @@ void dequantize_row_q2_k_hifi(const block_q2_k_hifi * GGML_RESTRICT x, float * G
         // The first 84 bytes of block_q2_k_hifi match Q2_K exactly
         dequantize_row_q2_K((const block_q2_K *)block, yb, Q2_K_HIFI_BLOCK_SIZE);
 
-        // Step 2: REPLACE outlier positions with stored original values
-        // These positions were zeroed during quantization, so we restore them completely
+        // Step 2: ADD residuals to outlier positions
+        // residual = original - reconstruction, so: original = reconstruction + residual
         const int n_outliers = block->outlier_count <= Q2_K_HIFI_OUTLIERS ? block->outlier_count : Q2_K_HIFI_OUTLIERS;
         for (int k_idx = 0; k_idx < n_outliers; ++k_idx) {
             const int idx = block->outlier_idx[k_idx];
             if (idx < Q2_K_HIFI_BLOCK_SIZE) {
-                yb[idx] = GGML_FP16_TO_FP32(block->outlier_vals[k_idx]);  // REPLACE, not add!
+                yb[idx] += GGML_FP16_TO_FP32(block->outlier_vals[k_idx]);  // ADD residual
             }
         }
     }
