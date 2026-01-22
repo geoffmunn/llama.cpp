@@ -913,26 +913,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
 
     // === Q2_K_HIFI: Model-size adaptive tensor upgrade ===
     // For 2-bit quantization, HIFI correction is especially valuable since Q2_K has
-    // significant quantization error. Target models 4B+ where the overhead is justified.
+    // significant quantization error.
+    // NOTE: For testing, we enable HIFI on ALL model sizes. In production, you may want
+    // to disable for tiny models (<1B) where overhead outweighs benefits.
     if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI && new_type == GGML_TYPE_Q2_K) {
-        const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
-        
-        bool use_hifi = false;
-        
-        // 4B+ class: Use HIFI - the residual correction helps significantly at 2-bit
-        // For smaller models (<4B), the overhead may not be worth it
-        if (model_params_b >= 4.0f && model_params_b <= 20.0f) {
-            use_hifi = true;
-        }
-        // For 2B-4B models, use HIFI only with imatrix (which helps target the right weights)
-        else if (model_params_b >= 2.0f && model_params_b < 4.0f) {
-            use_hifi = qs.has_imatrix;
-        }
-        // else: tiny (<2B) or huge (>20B) - keep Q2_K, no HIFI
-        
-        if (use_hifi) {
-            new_type = GGML_TYPE_Q2_K_HIFI;
-        }
+        // Always use HIFI for Q2_K_HIFI quantization - let users decide via ftype choice
+        new_type = GGML_TYPE_Q2_K_HIFI;
     }
 
     return new_type;
