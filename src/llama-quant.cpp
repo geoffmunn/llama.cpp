@@ -115,6 +115,81 @@ static float get_hifi_ffn_gate_threshold(float model_params_b) {
 }
 
 // ===========================================================================
+// Q2_K_HIFI Selective Enhancement
+// Only enhance the most important tensors to avoid BPW overhead on low-value layers
+// ===========================================================================
+
+// Get the percentage of Q2_K tensors to enhance to Q2_K_HIFI based on model size
+// Q2_K has significant quantization error, so HIFI helps - but not on ALL tensors
+// Key insight: enhancing too many tensors (>20%) hurts PPL due to overhead
+static float get_q2_hifi_enhancement_threshold(float model_params_b) {
+    if (model_params_b <= 1.0f) {
+        // Tiny models (≤1B, e.g. 0.6B): enhance only ~15%
+        // Very selective - tiny models are sensitive to overhead
+        return 0.15f;
+    } else if (model_params_b <= 2.0f) {
+        // Small models (1-2B): enhance ~18%
+        return 0.18f;
+    } else if (model_params_b <= 5.0f) {
+        // Medium models (2-5B): enhance ~20% - sweet spot for Q2_K_HIFI
+        return 0.20f;
+    } else if (model_params_b <= 10.0f) {
+        // Medium-large models (5-10B): enhance ~18%
+        return 0.18f;
+    } else {
+        // Large models (>10B): enhance ~15% - larger models self-correct
+        return 0.15f;
+    }
+}
+
+// Check if a Q2_K tensor should be enhanced to Q2_K_HIFI
+// Prioritizes: later FFN layers, attn_v, attn_k (high-sensitivity tensors)
+static bool should_enhance_q2k_tensor(
+    const std::string & name,
+    int i_layer,
+    int n_layer,
+    int n_enhanced,
+    int max_enhanced
+) {
+    // Reached enhancement limit
+    if (n_enhanced >= max_enhanced) {
+        return false;
+    }
+    
+    // Always enhance output.weight and token_embd.weight (critical path)
+    if (name.find("output.weight") != std::string::npos ||
+        name.find("token_embd.weight") != std::string::npos) {
+        return true;
+    }
+    
+    // Prioritize later layers (higher layer index = more important for output quality)
+    // Enhance the last 30% of layers for high-sensitivity tensor types
+    int layer_threshold = (int)(n_layer * 0.7f);
+    
+    // High-sensitivity tensor types in later layers
+    if (i_layer >= layer_threshold) {
+        if (name.find("ffn_down") != std::string::npos ||
+            name.find("ffn_up") != std::string::npos ||
+            name.find("attn_v") != std::string::npos ||
+            name.find("attn_output") != std::string::npos) {
+            return true;
+        }
+    }
+    
+    // For very late layers (last 15%), enhance more tensor types
+    int late_threshold = (int)(n_layer * 0.85f);
+    if (i_layer >= late_threshold) {
+        if (name.find("attn_k") != std::string::npos ||
+            name.find("attn_q") != std::string::npos ||
+            name.find("ffn_gate") != std::string::npos) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// ===========================================================================
 // Lever 3: Statistical Outlier Detection using 3σ rule
 // Computes the outlier ratio: count(|w| > 3*stddev) / n_elements
 // Used to determine if a tensor benefits from HIFI enhancement
@@ -339,6 +414,10 @@ struct quantize_state_impl {
 
     // used to figure out if a model shares tok_embd with the output weight
     bool has_output = false;
+
+    // Q2_K_HIFI selective enhancement tracking
+    int n_q2k_total    = 0;  // Total Q2_K tensors seen
+    int n_q2k_enhanced = 0;  // Number enhanced to Q2_K_HIFI
 
     quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params)
         : model(model)
@@ -911,13 +990,33 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
     }
 
-    // === Q2_K_HIFI: Model-size adaptive tensor upgrade ===
-    // For 2-bit quantization, HIFI correction is especially valuable since Q2_K has
-    // significant quantization error.
-    // NOTE: Currently enhancing ALL Q2_K tensors. After validating the vec_dot fix,
-    // we can add selective enhancement based on tensor importance.
+    // === Q2_K_HIFI: Selective tensor enhancement ===
+    // Only enhance the most important tensors (top ~15-20%) to avoid BPW overhead
+    // Key insight: enhancing ALL tensors hurts PPL due to overhead on low-value layers
     if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI && new_type == GGML_TYPE_Q2_K) {
-        new_type = GGML_TYPE_Q2_K_HIFI;
+        const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+        const float enhancement_threshold = get_q2_hifi_enhancement_threshold(model_params_b);
+        const int n_layer = (int)qs.model.hparams.n_layer;
+        
+        // Calculate max tensors to enhance (approximation based on typical tensor count)
+        // A model typically has ~6-8 weight tensors per layer + embeddings
+        const int approx_total_tensors = n_layer * 7 + 2;  // rough estimate
+        const int max_enhanced = (int)(approx_total_tensors * enhancement_threshold);
+        
+        // Extract layer number from tensor name (e.g., "blk.5.ffn_down.weight" -> 5)
+        int i_layer = -1;
+        if (sscanf(name.c_str(), "blk.%d.", &i_layer) != 1) {
+            i_layer = -1;  // Not a layer tensor (e.g., token_embd, output)
+        }
+        
+        // Track Q2_K tensors for statistics
+        qs.n_q2k_total++;
+        
+        // Check if this tensor should be enhanced
+        if (should_enhance_q2k_tensor(name, i_layer, n_layer, qs.n_q2k_enhanced, max_enhanced)) {
+            new_type = GGML_TYPE_Q2_K_HIFI;
+            qs.n_q2k_enhanced++;
+        }
     }
 
     return new_type;
@@ -1191,10 +1290,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     size_t total_size_org = 0;
     size_t total_size_new = 0;
-    
-    // Q2_K_HIFI enhancement tracking
-    int n_q2k_base = 0;
-    int n_q2k_hifi = 0;
 
     std::vector<std::thread> workers;
     workers.reserve(nthread);
@@ -1381,12 +1476,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // in then there's nothing to do.
             quantize = tensor->type != new_type;
             
-            // Track Q2_K_HIFI enhancement ratio
-            if (new_type == GGML_TYPE_Q2_K) {
-                n_q2k_base++;
-            } else if (new_type == GGML_TYPE_Q2_K_HIFI) {
-                n_q2k_hifi++;
-            }
+            // Note: Q2_K_HIFI enhancement tracking is done in llama_tensor_get_type()
         }
 
         if (!quantize) {
@@ -1587,9 +1677,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MiB\n", __func__, total_size_new/1024.0/1024.0);
     
     // Report Q2_K_HIFI statistics
-    if (n_q2k_hifi > 0) {
-        LLAMA_LOG_INFO("%s: Q2_K_HIFI tensors: %d (Q2_K base: %d)\n", 
-                       __func__, n_q2k_hifi, n_q2k_base);
+    if (qs.n_q2k_enhanced > 0) {
+        const int n_q2k_base = qs.n_q2k_total - qs.n_q2k_enhanced;
+        const float pct = qs.n_q2k_total > 0 ? (100.0f * qs.n_q2k_enhanced / qs.n_q2k_total) : 0.0f;
+        LLAMA_LOG_INFO("%s: Q2_K_HIFI tensors: %d of %d (%.1f%%) enhanced, %d kept as Q2_K\n", 
+                       __func__, qs.n_q2k_enhanced, qs.n_q2k_total, pct, n_q2k_base);
     }
 
     if (qs.n_fallback > 0) {
