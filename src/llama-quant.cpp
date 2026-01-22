@@ -911,36 +911,13 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
     }
 
-    // === Q2_K_HIFI: Selective tensor enhancement based on importance ===
-    // Only enhance critical tensors where HIFI correction provides the most benefit.
-    // Target: ~15-20% of tensors to keep BPW reasonable (~2.2-2.5 instead of ~4.0)
+    // === Q2_K_HIFI: Model-size adaptive tensor upgrade ===
+    // For 2-bit quantization, HIFI correction is especially valuable since Q2_K has
+    // significant quantization error.
+    // NOTE: Currently enhancing ALL Q2_K tensors. After validating the vec_dot fix,
+    // we can add selective enhancement based on tensor importance.
     if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI && new_type == GGML_TYPE_Q2_K) {
-        // Enhance these critical tensor types:
-        // 1. Attention Q/K/V projections (attn_q, attn_k, attn_v)
-        // 2. Attention output (attn_output) - already upgraded to Q3_K above
-        // 3. FFN gate/up projections for MoE experts
-        bool should_enhance = false;
-        
-        // Attention projections are critical for quality
-        if (name.find("attn_q.weight") != std::string::npos ||
-            name.find("attn_k.weight") != std::string::npos ||
-            name.find("attn_v.weight") != std::string::npos) {
-            should_enhance = true;
-        }
-        // FFN down projection (often has outliers)
-        else if (name.find("ffn_down.weight") != std::string::npos) {
-            should_enhance = true;
-        }
-        // MoE expert weights
-        else if (name.find("ffn_gate_exps") != std::string::npos ||
-                 name.find("ffn_up_exps") != std::string::npos) {
-            should_enhance = true;
-        }
-        
-        if (should_enhance) {
-            new_type = GGML_TYPE_Q2_K_HIFI;
-        }
-        // else: keep as Q2_K for less critical tensors
+        new_type = GGML_TYPE_Q2_K_HIFI;
     }
 
     return new_type;
@@ -1609,12 +1586,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     LLAMA_LOG_INFO("%s: model size  = %8.2f MiB\n", __func__, total_size_org/1024.0/1024.0);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MiB\n", __func__, total_size_new/1024.0/1024.0);
     
-    // Report Q2_K_HIFI enhancement statistics
-    if (n_q2k_hifi > 0 || n_q2k_base > 0) {
-        const int n_q2k_total = n_q2k_base + n_q2k_hifi;
-        LLAMA_LOG_INFO("%s: Q2_K_HIFI enhanced: %d / %d tensors (%.1f%%)\n", 
-                       __func__, n_q2k_hifi, n_q2k_total, 
-                       n_q2k_total > 0 ? 100.0 * n_q2k_hifi / n_q2k_total : 0.0);
+    // Report Q2_K_HIFI statistics
+    if (n_q2k_hifi > 0) {
+        LLAMA_LOG_INFO("%s: Q2_K_HIFI tensors: %d (Q2_K base: %d)\n", 
+                       __func__, n_q2k_hifi, n_q2k_base);
     }
 
     if (qs.n_fallback > 0) {

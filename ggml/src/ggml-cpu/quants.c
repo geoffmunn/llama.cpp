@@ -499,6 +499,82 @@ void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
+// Q2_K_HIFI vec_dot: Generic implementation
+// Based on Q2_K but with outlier corrections
+// Since outliers were ZEROED during quantization, we need to:
+// 1. Compute base Q2_K dot product (outlier positions contribute ~0 due to zeroing)
+// 2. ADD the correct outlier contributions
+void ggml_vec_dot_q2_k_hifi_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_k_hifi * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / Q2_K_HIFI_BLOCK_SIZE;
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+        const block_q2_k_hifi * xb = &x[i];
+        const block_q8_K * yb = &y[i];
+
+        const uint8_t * q2 = xb->qs;
+        const int8_t * q8 = yb->qs;
+        const uint8_t * sc = xb->scales;
+
+        int summs = 0;
+        for (int j = 0; j < 16; ++j) {
+            summs += yb->bsums[j] * (sc[j] >> 4);
+        }
+
+        const float dall = yb->d * GGML_CPU_FP16_TO_FP32(xb->d);
+        const float dmin = yb->d * GGML_CPU_FP16_TO_FP32(xb->dmin);
+
+        int isum = 0;
+        int is = 0;
+        int d;
+        for (int k = 0; k < QK_K/128; ++k) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                d = sc[is++] & 0xF;
+                int isuml = 0;
+                for (int l =  0; l < 16; ++l) isuml += q8[l] * ((q2[l] >> shift) & 3);
+                isum += d * isuml;
+                d = sc[is++] & 0xF;
+                isuml = 0;
+                for (int l = 16; l < 32; ++l) isuml += q8[l] * ((q2[l] >> shift) & 3);
+                isum += d * isuml;
+                shift += 2;
+                q8 += 32;
+            }
+            q2 += 32;
+        }
+        sumf += dall * isum - dmin * summs;
+
+        // Add outlier corrections
+        // Outlier positions were zeroed during quantization, so base contribution is ~0
+        // We add the correct contribution: outlier_value * y[outlier_idx] * y_scale
+        const float yd = yb->d;
+        const int n_outliers = xb->outlier_count <= Q2_K_HIFI_OUTLIERS ? xb->outlier_count : Q2_K_HIFI_OUTLIERS;
+        for (int k = 0; k < n_outliers; ++k) {
+            const int idx = xb->outlier_idx[k];
+            if (idx < Q2_K_HIFI_BLOCK_SIZE) {
+                sumf += GGML_FP16_TO_FP32(xb->outlier_vals[k]) * yb->qs[idx] * yd;
+            }
+        }
+    }
+    *s = sumf;
+}
+
+// Wrapper that calls generic implementation (arch-specific versions can override)
+void ggml_vec_dot_q2_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_q2_k_hifi_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
 void ggml_vec_dot_q3_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
