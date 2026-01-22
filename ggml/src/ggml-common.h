@@ -283,15 +283,11 @@ static_assert(sizeof(block_q2_K) == 2*sizeof(ggml_half) + QK_K/16 + QK_K/4, "wro
 #define Q2_K_HIFI_OUTLIERS 12
 typedef struct {
     // === Q2_K-COMPATIBLE REGION (84 bytes) - DO NOT REORDER ===
+    // Layout matches block_q2_K exactly for the first 84 bytes
     uint8_t scales[QK_K/16];   // 16 bytes: scales and mins, quantized with 4 bits
     uint8_t qs[QK_K/4];        // 64 bytes: quants (2 bits per weight)
-    GGML_EXTENSION union {
-        struct {
-            ggml_half d;       // 2 bytes: super-block scale for quantized scales
-            ggml_half dmin;    // 2 bytes: super-block scale for quantized mins
-        } GGML_COMMON_AGGR_S;
-        ggml_half2 dm;
-    } GGML_COMMON_AGGR_U;
+    ggml_half d;               // 2 bytes: super-block scale for quantized scales
+    ggml_half dmin;            // 2 bytes: super-block scale for quantized mins
     // === RESIDUAL CORRECTION EXTENSION (38 bytes) ===
     uint8_t outlier_count;                      // 1 byte: actual outliers stored (0-12)
     uint8_t _pad;                               // 1 byte: alignment padding
