@@ -490,6 +490,11 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                 new_type = GGML_TYPE_Q6_K;
                 (void)model_params_b; // Suppress unused warning - kept for future tuning
             }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
+                // Q2_K_HIFI: output.weight is critical, use Q4_K (matches Q2_K default behavior upgrade)
+                // For 2-bit base, Q4_K on output helps significantly
+                new_type = GGML_TYPE_Q4_K;
+            }
             else if (new_type != GGML_TYPE_Q8_0) {
                 new_type = GGML_TYPE_Q6_K;
             }
@@ -543,6 +548,15 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                     new_type = GGML_TYPE_Q6_K;
                 }
                 // else: tiny models skip - use default_type (Q3_K), matching Q3_K_M
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
+                // Q2_K_HIFI: token_embd handling
+                // For 2-bit base, use Q4_K on token_embd for models >= 4B
+                const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+                if (model_params_b >= 4.0f) {
+                    new_type = GGML_TYPE_Q4_K;
+                }
+                // else: smaller models use default Q2_K
             }
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
@@ -747,11 +761,13 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                     ftype == LLAMA_FTYPE_MOSTLY_Q3_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL  ||
                     ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ3_S  ||
                     ftype == LLAMA_FTYPE_MOSTLY_IQ3_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS ||
-                    ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {  // Match Q3_K_M for MoE
+                    ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI ||  // Match Q3_K_M for MoE
+                    ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {  // Match Q2_K for MoE
                     new_type = GGML_TYPE_Q5_K;
                 }
             } else {
                 if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K   ) new_type = GGML_TYPE_Q3_K;
+                else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) new_type = GGML_TYPE_Q3_K;  // Match Q2_K
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) new_type = GGML_TYPE_IQ3_S;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M ) new_type = GGML_TYPE_Q4_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) new_type = GGML_TYPE_Q4_K;  // Match Q3_K_M
@@ -895,6 +911,30 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
     }
 
+    // === Q2_K_HIFI: Model-size adaptive tensor upgrade ===
+    // For 2-bit quantization, HIFI correction is especially valuable since Q2_K has
+    // significant quantization error. Target models 4B+ where the overhead is justified.
+    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI && new_type == GGML_TYPE_Q2_K) {
+        const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+        
+        bool use_hifi = false;
+        
+        // 4B+ class: Use HIFI - the residual correction helps significantly at 2-bit
+        // For smaller models (<4B), the overhead may not be worth it
+        if (model_params_b >= 4.0f && model_params_b <= 20.0f) {
+            use_hifi = true;
+        }
+        // For 2B-4B models, use HIFI only with imatrix (which helps target the right weights)
+        else if (model_params_b >= 2.0f && model_params_b < 4.0f) {
+            use_hifi = qs.has_imatrix;
+        }
+        // else: tiny (<2B) or huge (>20B) - keep Q2_K, no HIFI
+        
+        if (use_hifi) {
+            new_type = GGML_TYPE_Q2_K_HIFI;
+        }
+    }
+
     return new_type;
 }
 
@@ -988,6 +1028,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         // K-quants
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:
         case LLAMA_FTYPE_MOSTLY_Q2_K:    default_type = GGML_TYPE_Q2_K;    break;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_HIFI: default_type = GGML_TYPE_Q2_K;  break; // Uses Q2_K as default, upgraded selectively
         case LLAMA_FTYPE_MOSTLY_IQ3_XS:  default_type = GGML_TYPE_IQ3_S;   break;
         case LLAMA_FTYPE_MOSTLY_Q3_K_S:
         case LLAMA_FTYPE_MOSTLY_Q3_K_M:

@@ -56,6 +56,7 @@ GGML_API void quantize_row_q6_K_ref(const float * GGML_RESTRICT x, block_q6_K * 
 GGML_API void quantize_row_q8_K_ref(const float * GGML_RESTRICT x, block_q8_K * GGML_RESTRICT y, int64_t k);
 
 GGML_API void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_q2_k_hifi_ref(const float * GGML_RESTRICT x, block_q2_k_hifi * GGML_RESTRICT y, int64_t k);
 
 GGML_API void quantize_row_tq1_0_ref(const float * GGML_RESTRICT x, block_tq1_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_tq2_0_ref(const float * GGML_RESTRICT x, block_tq2_0 * GGML_RESTRICT y, int64_t k);
@@ -130,6 +131,10 @@ GGML_API void iq3xs_free_impl(int grid_size);
 
 GGML_API void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// Q2_K_HIFI: Q2_K with 12 FP16 outliers for improved accuracy at 2-bit
+GGML_API void dequantize_row_q2_k_hifi(const block_q2_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q2_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 // Q3_K_HIFI_RES8: Lean INT8 residual version for imatrix use
 GGML_API void quantize_row_q3_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q3_k_hifi_res8 * GGML_RESTRICT y, int64_t k);
