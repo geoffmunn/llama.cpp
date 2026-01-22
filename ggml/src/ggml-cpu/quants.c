@@ -555,9 +555,9 @@ void ggml_vec_dot_q2_k_hifi_q8_K_generic(int n, float * GGML_RESTRICT s, size_t 
         }
         sumf += dall * isum - dmin * summs;
 
-        // Add outlier corrections
-        // Outlier positions were zeroed during quantization, so base contribution is ~0
-        // We add the correct contribution: outlier_value * y[outlier_idx] * y_scale
+        // Add outlier residual corrections
+        // outlier_vals stores RESIDUAL = original - reconstruction
+        // Adding residual * y gives the correct contribution
         const float yd = yb->d;
         const int n_outliers = xb->outlier_count <= Q2_K_HIFI_OUTLIERS ? xb->outlier_count : Q2_K_HIFI_OUTLIERS;
         for (int k = 0; k < n_outliers; ++k) {
