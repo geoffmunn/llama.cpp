@@ -569,10 +569,13 @@ void dequantize_q2_K(device const block_q2_K *xb, short il, thread type4x4 & reg
 }
 
 // Q2_K_HIFI: Q2_K-compatible layout with 12 FP16 outliers for improved accuracy
-// For template-based matmul kernels, we use simplified dequantization
-// Outliers are handled at the kernel level (see kernel_mul_mv_q2_k_hifi_f32_impl)
+// Q2_K_HIFI dequantization with full outlier correction for template-based matmul kernels
+// This handles outliers directly within the dequant function so kernel_mul_mm works correctly
 template <typename type4x4>
 void dequantize_q2_k_hifi(device const block_q2_k_hifi *xb, short il, thread type4x4 & reg) {
+    // Save original il for base index calculation (before il is modified)
+    const short orig_il = il;
+    
     // Base Q2_K dequantization - layout is compatible
     const float d = xb->d;
     const float min = xb->dmin;
@@ -589,7 +592,25 @@ void dequantize_q2_k_hifi(device const block_q2_k_hifi *xb, short il, thread typ
     for (int i = 0; i < 16; ++i) {
         reg[i/4][i%4] = dl * (q[i] & mask) - ml;
     }
-    // Note: Outliers are handled separately in kernel_mul_mv_q2_k_hifi_f32_impl
+    
+    // === OUTLIER CORRECTION ===
+    // Calculate the base element index for this 16-element sub-block
+    // Q2_K layout: 256 elements split into two 128-element halves
+    // Each half: 4 groups of 32 elements (by shift), each group split into 2x16
+    // Formula: base = (orig_il/8)*128 + ((orig_il%8)/2)*32 + (orig_il%2)*16
+    const int base_idx = (orig_il / 8) * 128 + ((orig_il % 8) / 2) * 32 + (orig_il % 2) * 16;
+    
+    // Apply outlier residual corrections for any outliers in this sub-block
+    const int n_outliers = xb->outlier_count <= 12 ? xb->outlier_count : 12;
+    for (int k = 0; k < n_outliers; ++k) {
+        const int outlier_idx = xb->outlier_idx[k];
+        // Check if this outlier falls within our 16-element range [base_idx, base_idx+16)
+        if (outlier_idx >= base_idx && outlier_idx < base_idx + 16) {
+            const int local_idx = outlier_idx - base_idx;
+            // Add the FP16 residual correction: reconstructed = base_dequant + residual
+            reg[local_idx/4][local_idx%4] += float(xb->outlier_vals[k]);
+        }
+    }
 }
 
 template <typename type4x4>
@@ -914,12 +935,13 @@ void dequantize_iq4_xs(device const block_iq4_xs * xb, short il, thread type4x4 
     }
 }
 
+// Q3_K_HIFI dequantization with full outlier correction for template-based matmul kernels
 template <typename type4x4>
 void dequantize_q3_k_hifi(device const block_q3_k_hifi * xb, short il, thread type4x4 & reg) {
+    // Save original il for base index calculation (before il is modified)
+    const short orig_il = il;
+    
     // Q3_K_HIFI uses Q3_K-compatible layout: hmask[32] + qs[64] + scales[12] + d + outliers
-    // For template-based matmul kernels, we use simplified dequantization
-    // Outliers are handled at the kernel level (see kernel_mul_mv_q3_k_hifi_f32_impl)
-    // This matches Q3_K dequantization exactly since the base layout is identical
     const half d_all = xb->d;
     device const uint8_t * q = (device const uint8_t *)xb->qs;
     device const uint8_t * h = (device const uint8_t *)xb->hmask;
@@ -945,8 +967,25 @@ void dequantize_q3_k_hifi(device const block_q3_k_hifi * xb, short il, thread ty
     for (int i = 0; i < 16; ++i) {
         reg[i/4][i%4] = dl * (q[i] & mask) - (h[i] & m ? 0 : ml);
     }
-    // Note: Outliers are handled separately in kernel_mul_mv_q3_k_hifi_f32_impl
-    // and in template-based matmul kernels via post-processing
+    
+    // === OUTLIER CORRECTION ===
+    // Calculate the base element index for this 16-element sub-block
+    // Q3_K layout: 256 elements split into two 128-element halves
+    // Each half: 4 groups of 32 elements (by shift), each group split into 2x16
+    // Formula: base = (orig_il/8)*128 + ((orig_il%8)/2)*32 + (orig_il%2)*16
+    const int base_idx = (orig_il / 8) * 128 + ((orig_il % 8) / 2) * 32 + (orig_il % 2) * 16;
+    
+    // Apply outlier residual corrections for any outliers in this sub-block
+    const int n_outliers = xb->outlier_count <= 16 ? xb->outlier_count : 16;
+    for (int k = 0; k < n_outliers; ++k) {
+        const int outlier_idx = xb->outlier_idx[k];
+        // Check if this outlier falls within our 16-element range [base_idx, base_idx+16)
+        if (outlier_idx >= base_idx && outlier_idx < base_idx + 16) {
+            const int local_idx = outlier_idx - base_idx;
+            // Add the FP16 residual correction: reconstructed = base_dequant + residual
+            reg[local_idx/4][local_idx%4] += float(xb->outlier_vals[k]);
+        }
+    }
 }
 
 enum ggml_sort_order {
