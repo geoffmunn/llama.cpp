@@ -594,20 +594,12 @@ void dequantize_q2_k_hifi(device const block_q2_k_hifi *xb, short il, thread typ
     }
     
     // === OUTLIER CORRECTION ===
-    // Calculate the base element index for this 16-element sub-block
-    // Q2_K layout: 256 elements split into two 128-element halves
-    // Each half: 4 groups of 32 elements (by shift), each group split into 2x16
-    // Formula: base = (orig_il/8)*128 + ((orig_il%8)/2)*32 + (orig_il%2)*16
     const int base_idx = (orig_il / 8) * 128 + ((orig_il % 8) / 2) * 32 + (orig_il % 2) * 16;
-    
-    // Apply outlier residual corrections for any outliers in this sub-block
     const int n_outliers = xb->outlier_count <= 12 ? xb->outlier_count : 12;
     for (int k = 0; k < n_outliers; ++k) {
         const int outlier_idx = xb->outlier_idx[k];
-        // Check if this outlier falls within our 16-element range [base_idx, base_idx+16)
         if (outlier_idx >= base_idx && outlier_idx < base_idx + 16) {
             const int local_idx = outlier_idx - base_idx;
-            // Add the FP16 residual correction: reconstructed = base_dequant + residual
             reg[local_idx/4][local_idx%4] += float(xb->outlier_vals[k]);
         }
     }
