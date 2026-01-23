@@ -122,24 +122,11 @@ static float get_hifi_ffn_gate_threshold(float model_params_b) {
 // Get the percentage of Q2_K tensors to enhance to Q2_K_HIFI based on model size
 // Q2_K has significant quantization error, so HIFI helps - but not on ALL tensors
 // Key insight: enhancing too many tensors (>20%) hurts PPL due to overhead
-static float get_q2_hifi_enhancement_threshold(float model_params_b) {
-    if (model_params_b <= 1.0f) {
-        // Tiny models (≤1B, e.g. 0.6B): enhance only ~15%
-        // Very selective - tiny models are sensitive to overhead
-        return 0.15f;
-    } else if (model_params_b <= 2.0f) {
-        // Small models (1-2B): enhance ~18%
-        return 0.18f;
-    } else if (model_params_b <= 5.0f) {
-        // Medium models (2-5B): enhance ~20% - sweet spot for Q2_K_HIFI
-        return 0.20f;
-    } else if (model_params_b <= 10.0f) {
-        // Medium-large models (5-10B): enhance ~18%
-        return 0.18f;
-    } else {
-        // Large models (>10B): enhance ~15% - larger models self-correct
-        return 0.15f;
-    }
+static float get_q2_hifi_enhancement_threshold(float /* model_params_b */) {
+    // STRICT: Top 5% only - Q2_K_HIFI works best when very selectively applied
+    // This ensures only the most sensitive tensors get enhancement, minimizing BPW overhead
+    // and maximizing quality improvement per bit spent
+    return 0.05f;  // Top 5% across all model sizes
 }
 
 // Check if a Q2_K tensor should be enhanced to Q2_K_HIFI
@@ -162,26 +149,23 @@ static bool should_enhance_q2k_tensor(
         return true;
     }
     
-    // Prioritize later layers (higher layer index = more important for output quality)
-    // Enhance the last 30% of layers for high-sensitivity tensor types
-    int layer_threshold = (int)(n_layer * 0.7f);
+    // STRICT: Only enhance the last 10% of layers for maximum impact
+    // Top 5% selection means we can afford to be very selective
+    int layer_threshold = (int)(n_layer * 0.9f);
     
-    // High-sensitivity tensor types in later layers
+    // Only the most critical tensor types in the final layers
     if (i_layer >= layer_threshold) {
+        // FFN layers are most critical for output quality
         if (name.find("ffn_down") != std::string::npos ||
-            name.find("ffn_up") != std::string::npos ||
-            name.find("attn_v") != std::string::npos ||
-            name.find("attn_output") != std::string::npos) {
+            name.find("ffn_up") != std::string::npos) {
             return true;
         }
     }
     
-    // For very late layers (last 15%), enhance more tensor types
-    int late_threshold = (int)(n_layer * 0.85f);
+    // Very late layers (last 5%): also enhance attn_output for final attention
+    int late_threshold = (int)(n_layer * 0.95f);
     if (i_layer >= late_threshold) {
-        if (name.find("attn_k") != std::string::npos ||
-            name.find("attn_q") != std::string::npos ||
-            name.find("ffn_gate") != std::string::npos) {
+        if (name.find("attn_output") != std::string::npos) {
             return true;
         }
     }
@@ -991,9 +975,16 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     }
 
     // === Q2_K_HIFI: Selective tensor enhancement ===
-    // Only enhance the most important tensors (top ~15-20%) to avoid BPW overhead
-    // Key insight: enhancing ALL tensors hurts PPL due to overhead on low-value layers
+    // CRITICAL: Q2_K_HIFI requires imatrix for outlier selection.
+    // Without imatrix, magnitude-only outlier selection corrupts the model (PPL explodes).
+    // When no imatrix is provided, tensors stay as plain Q2_K for stability.
     if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI && new_type == GGML_TYPE_Q2_K) {
+        // Track Q2_K tensors for statistics
+        qs.n_q2k_total++;
+        
+        // Note: Q2_K_HIFI without imatrix is handled at the top level of llama_model_quantize_impl
+        // by converting ftype to LLAMA_FTYPE_MOSTLY_Q2_K. If we reach here, imatrix is available.
+        
         const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
         const float enhancement_threshold = get_q2_hifi_enhancement_threshold(model_params_b);
         const int n_layer = (int)qs.model.hparams.n_layer;
@@ -1008,9 +999,6 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         if (sscanf(name.c_str(), "blk.%d.", &i_layer) != 1) {
             i_layer = -1;  // Not a layer tensor (e.g., token_embd, output)
         }
-        
-        // Track Q2_K tensors for statistics
-        qs.n_q2k_total++;
         
         // Check if this tensor should be enhanced
         if (should_enhance_q2k_tensor(name, i_layer, n_layer, qs.n_q2k_enhanced, max_enhanced)) {
@@ -1192,6 +1180,20 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 }
             }
         }
+    }
+
+    // Q2_K_HIFI requires imatrix for quality - without it, fall back to plain Q2_K
+    // This is because magnitude-only outlier selection produces garbage PPL
+    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI && !qs.has_imatrix) {
+        LLAMA_LOG_WARN("\n");
+        LLAMA_LOG_WARN("================================================================================\n");
+        LLAMA_LOG_WARN("WARNING: Q2_K_HIFI requires imatrix for quality.\n");
+        LLAMA_LOG_WARN("         Without imatrix, falling back to standard Q2_K quantization.\n");
+        LLAMA_LOG_WARN("         To use Q2_K_HIFI enhancement, provide --imatrix <file>\n");
+        LLAMA_LOG_WARN("================================================================================\n");
+        LLAMA_LOG_WARN("\n");
+        ftype = LLAMA_FTYPE_MOSTLY_Q2_K;
+        default_type = GGML_TYPE_Q2_K;
     }
 
     const size_t align = GGUF_DEFAULT_ALIGNMENT;
