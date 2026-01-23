@@ -504,6 +504,16 @@ void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 // Since outliers were ZEROED during quantization, we need to:
 // 1. Compute base Q2_K dot product (outlier positions contribute ~0 due to zeroing)
 // 2. ADD the correct outlier contributions
+
+// DEBUG: Static counter to limit debug output
+static int q2k_hifi_debug_counter = 0;
+static int q2k_hifi_total_calls = 0;
+static float q2k_hifi_min_sumf = 1e30f;
+static float q2k_hifi_max_sumf = -1e30f;
+static int q2k_hifi_nan_count = 0;
+static int q2k_hifi_inf_count = 0;
+#define Q2K_HIFI_DEBUG_LIMIT 3
+
 void ggml_vec_dot_q2_k_hifi_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -511,16 +521,50 @@ void ggml_vec_dot_q2_k_hifi_q8_K_generic(int n, float * GGML_RESTRICT s, size_t 
     UNUSED(by);
     UNUSED(bs);
 
+    q2k_hifi_total_calls++;
+    
+    // Print total call count periodically with stats
+    if (q2k_hifi_total_calls % 50000 == 0) {
+        fprintf(stderr, "[Q2K_HIFI] calls=%d, sumf range=[%g, %g], nan=%d, inf=%d\n", 
+                q2k_hifi_total_calls, q2k_hifi_min_sumf, q2k_hifi_max_sumf,
+                q2k_hifi_nan_count, q2k_hifi_inf_count);
+    }
+
     const block_q2_k_hifi * GGML_RESTRICT x = vx;
     const block_q8_K * GGML_RESTRICT y = vy;
 
     const int nb = n / Q2_K_HIFI_BLOCK_SIZE;
+
+    // DEBUG: Print info for first few calls
+    int do_debug = (q2k_hifi_debug_counter < Q2K_HIFI_DEBUG_LIMIT);
+    if (do_debug) {
+        q2k_hifi_debug_counter++;
+        fprintf(stderr, "\n=== Q2_K_HIFI vec_dot DEBUG (call #%d, total: %d) ===\n", q2k_hifi_debug_counter, q2k_hifi_total_calls);
+        fprintf(stderr, "  n=%d, nb=%d, sizeof(block_q2_k_hifi)=%zu, sizeof(block_q8_K)=%zu\n",
+                n, nb, sizeof(block_q2_k_hifi), sizeof(block_q8_K));
+        fprintf(stderr, "  vx=%p, vy=%p\n", vx, vy);
+    }
 
     float sumf = 0;
 
     for (int i = 0; i < nb; ++i) {
         const block_q2_k_hifi * xb = &x[i];
         const block_q8_K * yb = &y[i];
+
+        // DEBUG: Print block info for first block of first few calls
+        if (do_debug && i == 0) {
+            fprintf(stderr, "  Block 0: xb=%p (offset from vx: %td)\n", (void*)xb, (char*)xb - (char*)vx);
+            fprintf(stderr, "    xb->d=%f, xb->dmin=%f\n", GGML_CPU_FP16_TO_FP32(xb->d), GGML_CPU_FP16_TO_FP32(xb->dmin));
+            fprintf(stderr, "    xb->outlier_count=%d\n", xb->outlier_count);
+            fprintf(stderr, "    xb->scales[0..3]=%d,%d,%d,%d\n", xb->scales[0], xb->scales[1], xb->scales[2], xb->scales[3]);
+            fprintf(stderr, "    xb->qs[0..3]=%d,%d,%d,%d\n", xb->qs[0], xb->qs[1], xb->qs[2], xb->qs[3]);
+            if (xb->outlier_count > 0) {
+                fprintf(stderr, "    outlier_idx[0]=%d, outlier_vals[0]=%f\n",
+                        xb->outlier_idx[0], GGML_FP16_TO_FP32(xb->outlier_vals[0]));
+            }
+            fprintf(stderr, "    yb->d=%f\n", yb->d);
+            fprintf(stderr, "    yb->qs[0..3]=%d,%d,%d,%d\n", yb->qs[0], yb->qs[1], yb->qs[2], yb->qs[3]);
+        }
 
         const uint8_t * q2 = xb->qs;
         const int8_t * q8 = yb->qs;
@@ -560,13 +604,56 @@ void ggml_vec_dot_q2_k_hifi_q8_K_generic(int n, float * GGML_RESTRICT s, size_t 
         // Adding residual * y gives the correct contribution
         const float yd = yb->d;
         const int n_outliers = xb->outlier_count <= Q2_K_HIFI_OUTLIERS ? xb->outlier_count : Q2_K_HIFI_OUTLIERS;
+        
+        // DEBUG: Track outlier contribution for first call
+        float outlier_contrib = 0;
+        
+        // TEMP DEBUG: Disable outlier correction to test
+        (void)yd;
+        (void)n_outliers;
+        (void)outlier_contrib;
+#if 0  // TEMPORARILY DISABLED FOR DEBUGGING
         for (int k = 0; k < n_outliers; ++k) {
             const int idx = xb->outlier_idx[k];
             if (idx < Q2_K_HIFI_BLOCK_SIZE) {
-                sumf += GGML_FP16_TO_FP32(xb->outlier_vals[k]) * yb->qs[idx] * yd;
+                float contrib = GGML_FP16_TO_FP32(xb->outlier_vals[k]) * yb->qs[idx] * yd;
+                sumf += contrib;
+                outlier_contrib += contrib;
+            }
+        }
+#endif
+        
+        // DEBUG: Print per-block contribution for first call
+        if (do_debug && i == 0) {
+            fprintf(stderr, "    Block 0 base contribution: %f\n", dall * isum - dmin * summs);
+            fprintf(stderr, "    Block 0 outlier contribution: %f\n", outlier_contrib);
+        }
+    }
+    
+    // DEBUG: Print final result
+    if (do_debug) {
+        fprintf(stderr, "  Final sumf: %f\n", sumf);
+        fprintf(stderr, "=== END DEBUG ===\n\n");
+    }
+    
+    // Track stats
+    if (sumf != sumf) q2k_hifi_nan_count++;  // NaN check
+    else if (sumf > 1e20f || sumf < -1e20f) q2k_hifi_inf_count++;
+    else {
+        if (sumf < q2k_hifi_min_sumf) q2k_hifi_min_sumf = sumf;
+        if (sumf > q2k_hifi_max_sumf) q2k_hifi_max_sumf = sumf;
+        // Log any unusually large values (> 100) 
+        if ((sumf > 100.0f || sumf < -100.0f) && q2k_hifi_total_calls < 100000) {
+            static int large_count = 0;
+            if (large_count < 10) {
+                large_count++;
+                fprintf(stderr, "[Q2K_HIFI] LARGE sumf=%g at call %d, n=%d, d=%g, dmin=%g\n",
+                        sumf, q2k_hifi_total_calls, n,
+                        GGML_CPU_FP16_TO_FP32(x[0].d), GGML_CPU_FP16_TO_FP32(x[0].dmin));
             }
         }
     }
+    
     *s = sumf;
 }
 
