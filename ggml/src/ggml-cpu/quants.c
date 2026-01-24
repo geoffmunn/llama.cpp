@@ -556,15 +556,21 @@ void ggml_vec_dot_q2_k_hifi_q8_K_generic(int n, float * GGML_RESTRICT s, size_t 
         }
         sumf += dall * isum - dmin * summs;
 
-        // Add outlier residual corrections
-        // outlier_vals stores RESIDUAL = original - reconstruction
-        // Adding residual * y gives the correct contribution
+        // Outlier replacement corrections
+        // outlier_vals stores ORIGINAL outlier values (not residuals)
+        // Q2_K_HIFI uses outlier-replacement: replace dequantized value with stored FP16 original
+        // Since outliers were zeroed during quantization, dequantized values at outlier positions are ~0
+        // So we can approximate: just add the original outlier contribution
         const float yd = yb->d;
         const int n_outliers = xb->outlier_count <= Q2_K_HIFI_OUTLIERS ? xb->outlier_count : Q2_K_HIFI_OUTLIERS;
         for (int k = 0; k < n_outliers; ++k) {
             const int idx = xb->outlier_idx[k];
             if (idx < Q2_K_HIFI_BLOCK_SIZE) {
-                sumf += GGML_FP16_TO_FP32(xb->outlier_vals[k]) * yb->qs[idx] * yd;
+                // Since outliers were zeroed, dequantized value at this position is approximately 0
+                // We replace it with the original outlier value
+                const float outlier_val = GGML_FP16_TO_FP32(xb->outlier_vals[k]);
+                // Add the original outlier contribution (dequantized contribution is already ~0 in sumf)
+                sumf += outlier_val * yb->qs[idx] * yd;
             }
         }
     }
