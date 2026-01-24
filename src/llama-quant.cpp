@@ -149,9 +149,9 @@ static bool should_enhance_q2k_tensor(
         return true;
     }
     
-    // STRICT: Only enhance the last 10% of layers for maximum impact
-    // Top 5% selection means we can afford to be very selective
-    int layer_threshold = (int)(n_layer * 0.9f);
+    // Enhance the last 15% of layers to reach ~5% tensor enhancement target
+    // This gives us more layers to select from while still focusing on critical late layers
+    int layer_threshold = (int)(n_layer * 0.85f);
     
     // Only the most critical tensor types in the final layers
     // REFINED: Only enhance ffn_down (not ffn_up) - down-projections are more critical
@@ -548,9 +548,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                 (void)model_params_b; // Suppress unused warning - kept for future tuning
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
-                // Q2_K_HIFI: output.weight is critical, use Q4_K (matches Q2_K default behavior upgrade)
-                // For 2-bit base, Q4_K on output helps significantly
-                new_type = GGML_TYPE_Q4_K;
+                // Q2_K_HIFI: output.weight should be enhanced to Q2_K_HIFI for maximum quality
+                // Start with Q2_K base, then enhancement check will upgrade to Q2_K_HIFI
+                new_type = GGML_TYPE_Q2_K;
             }
             else if (new_type != GGML_TYPE_Q8_0) {
                 new_type = GGML_TYPE_Q6_K;
