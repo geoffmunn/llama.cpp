@@ -597,15 +597,21 @@ void dequantize_q2_k_hifi(device const block_q2_k_hifi *xb, short il, thread typ
     // Restore outliers by adding residuals to the base Q2_K reconstruction
     // Base Q2_K was quantized with outliers zeroed, so reconstruction ≈ 0 for outlier positions
     // Residual = original - reconstruction, so: original = reconstruction + residual
+    // Q2_K layout: 256 elements = 16 chunks of 16 elements each
+    // Each chunk processes 16 consecutive elements in the register
+    // Calculate base index: il/8 splits into two 128-element halves, then (il%8)/2 gives 32-element groups, then (il%2) gives 16-element chunks
     const int base_idx = (orig_il / 8) * 128 + ((orig_il % 8) / 2) * 32 + (orig_il % 2) * 16;
     const int n_outliers = xb->outlier_count <= Q2_K_HIFI_OUTLIERS ? xb->outlier_count : Q2_K_HIFI_OUTLIERS;
     for (int k = 0; k < n_outliers; ++k) {
-        const int outlier_idx = xb->outlier_idx[k];
+        const int outlier_idx = (int)xb->outlier_idx[k];
         // Check if this outlier falls within the current 16-element chunk being dequantized
         if (outlier_idx >= base_idx && outlier_idx < base_idx + 16) {
             const int local_idx = outlier_idx - base_idx;
-            // Add residual to restore original value: reconstruction + residual = original
-            reg[local_idx/4][local_idx%4] += float(xb->outlier_vals[k]);
+            // Verify local_idx is in valid range [0, 15]
+            if (local_idx >= 0 && local_idx < 16) {
+                // Add residual to restore original value: reconstruction + residual = original
+                reg[local_idx/4][local_idx%4] += float(xb->outlier_vals[k]);
+            }
         }
     }
 }
