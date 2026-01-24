@@ -7235,40 +7235,37 @@ void kernel_mul_mv_q2_k_hifi_f32_impl(
         y4 += 4 * QK_K;
     }
 
-    // Apply outlier corrections
-    // Each thread handles its portion of the y vector (32 elements within each block)
-    // y_offset is the starting position within the 256-element block that this thread handles
-    // TEMPORARILY DISABLED for debugging - uncomment to enable outlier correction
-    /*
-    const int y_offset_in_block = 128 * iq + 8 * ir;  // offset within block (0-255)
-    device const float * y_base = y + ix * QK_K;       // start of y for block 'ix'
-
+    // Apply outlier replacement corrections
+    // Q2_K_HIFI uses outlier-replacement: replace dequantized value with stored FP16 original
+    // For vec_dot, we need to subtract the dequantized contribution and add the original
+    // Since outliers were zeroed during quantization, dequantized values at outlier positions are ~0
+    // So we can approximate: just add the original outlier contribution
+    device const float * y_base = y + ix * QK_K;
     for (int ib = ix; ib < nb; ib += 4) {
         for (short row = 0; row < nr0; ++row) {
-            device const block_q2_k_hifi * xb = x + ib + row * (args.nb01 / sizeof(block_q2_k_hifi));
-            device const float * y_block = y_base;
-
-            for (int k = 0; k < Q2_K_HIFI_OUTLIERS; ++k) {
+            device const block_q2_k_hifi * xb = (device const block_q2_k_hifi *)(src0_base + row * args.nb01 + ib * sizeof(block_q2_k_hifi));
+            const int n_outliers = xb->outlier_count <= Q2_K_HIFI_OUTLIERS ? xb->outlier_count : Q2_K_HIFI_OUTLIERS;
+            
+            // For each outlier, add the contribution from the original value
+            // Since outliers were zeroed, the dequantized contribution is already ~0 in sumf
+            for (int k = 0; k < n_outliers; ++k) {
                 const int idx = xb->outlier_idx[k];
-                const float outlier_val = float(xb->outlier_vals[k]);
-                // Only this thread handles if idx falls in its range within the block
-                if (idx >= y_offset_in_block && idx < y_offset_in_block + 32) {
-                    sumf[row] += outlier_val * y_block[idx];
+                if (idx < Q2_K_HIFI_BLOCK_SIZE) {
+                    const float outlier_val = float(xb->outlier_vals[k]);
+                    // Add the original outlier contribution
+                    sumf[row] += outlier_val * y_base[idx];
                 }
             }
         }
         y_base += 4 * QK_K;
     }
-    */
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
 
     for (int row = 0; row < nr0 && first_row + row < args.ne0; ++row) {
         float sum_all = simd_sum(sumf[row]);
         if (tiisg == 0) {
-            // DEBUG: Write a test value to verify kernel is being called
-            // If this kernel runs, the output should be completely wrong
-            dst_f32[first_row + row] = 999999.0f; // sum_all;
+            dst_f32[first_row + row] = sum_all;
         }
     }
 }
