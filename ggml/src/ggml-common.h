@@ -289,13 +289,13 @@ typedef struct {
     uint8_t qs[QK_K/4];        // 64 bytes: quants (2 bits per weight)
     ggml_half d;               // 2 bytes: super-block scale for quantized scales
     ggml_half dmin;            // 2 bytes: super-block scale for quantized mins
-    // === RESIDUAL CORRECTION EXTENSION (20 bytes) ===
-    uint8_t outlier_count;                      // 1 byte: actual outliers stored (0-6)
+    // === RESIDUAL CORRECTION EXTENSION ===
+    uint8_t outlier_count;                      // 1 byte: actual outliers stored (0-4)
     uint8_t _pad;                               // 1 byte: alignment padding
-    uint8_t outlier_idx[Q2_K_HIFI_OUTLIERS];    // 6 bytes: outlier positions (0-255)
-    ggml_half outlier_vals[Q2_K_HIFI_OUTLIERS]; // 12 bytes: FP16 residual corrections
+    uint8_t outlier_idx[Q2_K_HIFI_OUTLIERS];    // 4 bytes: outlier positions (0-255)
+    ggml_half outlier_vals[Q2_K_HIFI_OUTLIERS]; // 8 bytes: FP16 residual corrections
 } block_q2_k_hifi;
-// Size: 84 (Q2_K) + 2 (count+pad) + 6 (idx) + 12 (vals) = 104 bytes
+// Size: 84 (Q2_K) + 2 (count+pad) + 4 (idx) + 8 (vals) = 98 bytes (with padding to 104 for alignment)
 static_assert(sizeof(block_q2_k_hifi) == sizeof(block_q2_K) + 2 + Q2_K_HIFI_OUTLIERS + Q2_K_HIFI_OUTLIERS*sizeof(ggml_half), "wrong q2_k_hifi block size/padding");
 
 // 3-bit quantization

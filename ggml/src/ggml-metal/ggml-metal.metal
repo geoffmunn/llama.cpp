@@ -568,7 +568,7 @@ void dequantize_q2_K(device const block_q2_K *xb, short il, thread type4x4 & reg
     }
 }
 
-// Q2_K_HIFI: Q2_K-compatible layout with 12 FP16 outliers for improved accuracy
+// Q2_K_HIFI: Q2_K-compatible layout with FP16 outlier residuals for improved accuracy
 // Q2_K_HIFI dequantization with full outlier correction for template-based matmul kernels
 // This handles outliers directly within the dequant function so kernel_mul_mm works correctly
 template <typename type4x4>
@@ -594,12 +594,17 @@ void dequantize_q2_k_hifi(device const block_q2_k_hifi *xb, short il, thread typ
     }
     
     // === OUTLIER CORRECTION ===
+    // Restore outliers by adding residuals to the base Q2_K reconstruction
+    // Base Q2_K was quantized with outliers zeroed, so reconstruction ≈ 0 for outlier positions
+    // Residual = original - reconstruction, so: original = reconstruction + residual
     const int base_idx = (orig_il / 8) * 128 + ((orig_il % 8) / 2) * 32 + (orig_il % 2) * 16;
-    const int n_outliers = xb->outlier_count <= 12 ? xb->outlier_count : 12;
+    const int n_outliers = xb->outlier_count <= Q2_K_HIFI_OUTLIERS ? xb->outlier_count : Q2_K_HIFI_OUTLIERS;
     for (int k = 0; k < n_outliers; ++k) {
         const int outlier_idx = xb->outlier_idx[k];
+        // Check if this outlier falls within the current 16-element chunk being dequantized
         if (outlier_idx >= base_idx && outlier_idx < base_idx + 16) {
             const int local_idx = outlier_idx - base_idx;
+            // Add residual to restore original value: reconstruction + residual = original
             reg[local_idx/4][local_idx%4] += float(xb->outlier_vals[k]);
         }
     }
@@ -7137,8 +7142,8 @@ kernel void kernel_mul_mv_q2_K_f32(
     kernel_mul_mv_q2_K_f32_impl<N_R0_Q2_K, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, nullptr, tgpig, tiisg, sgitg);
 }
 
-// Q2_K_HIFI: Q2_K-compatible layout with 12 FP16 outliers for improved accuracy
-// DEBUG: Testing with manual block iteration to fix stride issue
+// Q2_K_HIFI: Q2_K-compatible layout with FP16 outlier residuals for improved accuracy
+// Uses residual-based outlier restoration to correct weights Q2_K fails on
 template<int nr0, typename args_t>
 void kernel_mul_mv_q2_k_hifi_f32_impl(
         args_t args,
@@ -7165,7 +7170,7 @@ void kernel_mul_mv_q2_k_hifi_f32_impl(
     const uint64_t offset0 = first_row*args.nb01 + (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
     const uint64_t offset1 =        r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
 
-    // For Q2_K_HIFI, each block is 122 bytes (vs 84 for Q2_K)
+    // For Q2_K_HIFI, each block is 104 bytes (vs 84 for Q2_K)
     // We must manually calculate block offsets to handle the different block size
     
     device const char * src0_base = src0 + offset0;
