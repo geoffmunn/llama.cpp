@@ -122,47 +122,56 @@ static float get_hifi_ffn_gate_threshold(float model_params_b) {
 // Get the percentage of Q2_K tensors to enhance to Q2_K_HIFI based on model size
 // Q2_K has significant quantization error, so HIFI helps - but not on ALL tensors
 // Key insight: enhancing too many tensors (>20%) hurts PPL due to overhead
-static float get_q2_hifi_enhancement_threshold(float /* model_params_b */) {
-    // STRICT: Top 5% only - Q2_K_HIFI works best when very selectively applied
-    // This ensures only the most sensitive tensors get enhancement, minimizing BPW overhead
-    // and maximizing quality improvement per bit spent
-    return 0.05f;  // Top 5% across all model sizes
+static float get_q2_hifi_enhancement_threshold(float model_params_b) {
+    if (model_params_b <= 1.7f) {
+        // Small models: only 1-3 tensors total (output.weight + 1-2 last FFN down)
+        // This is ~1-2% of tensors, but absolute count matters more than percentage
+        return 0.01f;  // Very strict for small models
+    } else {
+        // Larger models: can be slightly more permissive
+        return 0.05f;  // Top 5% for larger models
+    }
 }
 
 // Check if a Q2_K tensor should be enhanced to Q2_K_HIFI
-// Prioritizes: later FFN layers, attn_v, attn_k (high-sensitivity tensors)
+// For small models (≤1.7B), be extremely selective: only output.weight + last 1-2 FFN down layers
+// For larger models, can be slightly more permissive
 static bool should_enhance_q2k_tensor(
     const std::string & name,
     int i_layer,
     int n_layer,
     int n_enhanced,
-    int max_enhanced
+    int max_enhanced,
+    float model_params_b
 ) {
     // Reached enhancement limit
     if (n_enhanced >= max_enhanced) {
         return false;
     }
     
-    // Always enhance output.weight and token_embd.weight (critical path)
-    if (name.find("output.weight") != std::string::npos ||
-        name.find("token_embd.weight") != std::string::npos) {
+    // Always enhance output.weight (critical path - always worth it)
+    if (name.find("output.weight") != std::string::npos) {
         return true;
     }
     
-    // Enhance the last 15% of layers to reach ~5% tensor enhancement target
-    // This gives us more layers to select from while still focusing on critical late layers
-    int layer_threshold = (int)(n_layer * 0.85f);
-    
-    // Only the most critical tensor types in the final layers
-    // REFINED: Only enhance ffn_down (not ffn_up) - down-projections are more critical
-    if (i_layer >= layer_threshold) {
-        // Only ffn_down is enhanced - ffn_up removed as it's less critical
-        if (name.find("ffn_down") != std::string::npos) {
-            return true;
+    // For small models (≤1.7B), be extremely selective
+    if (model_params_b <= 1.7f) {
+        // Only enhance the last 1-2 FFN down layers (e.g., blk.26.ffn_down, blk.27.ffn_down)
+        // Small models have less redundancy - early/mid layer errors propagate catastrophically
+        if (i_layer >= n_layer - 2 && name.find("ffn_down") != std::string::npos) {
+            // Only allow 1-2 FFN down layers total (in addition to output.weight)
+            if (n_enhanced < 3) {  // output.weight + max 2 FFN down
+                return true;
+            }
         }
+        return false;
     }
     
-    // REMOVED: attn_output enhancement - attention layers don't benefit as much from HIFI
+    // For larger models (1.7B+), can enhance last 15% of layers
+    int layer_threshold = (int)(n_layer * 0.85f);
+    if (i_layer >= layer_threshold && name.find("ffn_down") != std::string::npos) {
+        return true;
+    }
     
     return false;
 }
@@ -995,7 +1004,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
         
         // Check if this tensor should be enhanced
-        if (should_enhance_q2k_tensor(name, i_layer, n_layer, qs.n_q2k_enhanced, max_enhanced)) {
+        if (should_enhance_q2k_tensor(name, i_layer, n_layer, qs.n_q2k_enhanced, max_enhanced, model_params_b)) {
             new_type = GGML_TYPE_Q2_K_HIFI;
             qs.n_q2k_enhanced++;
             // Debug: log which tensors are being enhanced
