@@ -134,6 +134,7 @@ static float get_q2_hifi_enhancement_threshold(float model_params_b) {
 }
 
 // Check if a Q2_K tensor should be enhanced to Q2_K_HIFI
+// Uses hardcoded critical tensor names as primary strategy (more reliable than dynamic selection)
 // For small models (≤1.7B), be extremely selective: only output.weight + last 1-2 FFN down layers
 // For larger models, can be slightly more permissive
 static bool should_enhance_q2k_tensor(
@@ -149,25 +150,25 @@ static bool should_enhance_q2k_tensor(
         return false;
     }
     
-    // Always enhance output.weight (critical path - always worth it)
+    // HARDCODED: Always enhance output.weight (critical path - always worth it)
     if (name.find("output.weight") != std::string::npos) {
         return true;
     }
     
-    // For small models (≤1.7B), be extremely selective
+    // HARDCODED: For small models (≤1.7B), enhance only last 2 FFN down layers
     if (model_params_b <= 1.7f) {
-        // Only enhance the last 1-2 FFN down layers (e.g., blk.26.ffn_down, blk.27.ffn_down)
-        // Small models have less redundancy - early/mid layer errors propagate catastrophically
-        if (i_layer >= n_layer - 2 && name.find("ffn_down") != std::string::npos) {
-            // Only allow 1-2 FFN down layers total (in addition to output.weight)
-            if (n_enhanced < 3) {  // output.weight + max 2 FFN down
+        // Extract layer number from name (e.g., "blk.26.ffn_down.weight" -> 26)
+        int layer_num = -1;
+        if (sscanf(name.c_str(), "blk.%d.ffn_down", &layer_num) == 1) {
+            // Only enhance last 2 layers (e.g., layers 26-27 for 28-layer model)
+            if (layer_num >= n_layer - 2 && n_enhanced < 3) {
                 return true;
             }
         }
         return false;
     }
     
-    // For larger models (1.7B+), can enhance last 15% of layers
+    // For larger models (1.7B+), enhance last 15% of layers
     int layer_threshold = (int)(n_layer * 0.85f);
     if (i_layer >= layer_threshold && name.find("ffn_down") != std::string::npos) {
         return true;
@@ -989,13 +990,20 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         // by converting ftype to LLAMA_FTYPE_MOSTLY_Q2_K. If we reach here, imatrix is available.
         
         const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
-        const float enhancement_threshold = get_q2_hifi_enhancement_threshold(model_params_b);
         const int n_layer = (int)qs.model.hparams.n_layer;
         
-        // Calculate max tensors to enhance (approximation based on typical tensor count)
-        // A model typically has ~6-8 weight tensors per layer + embeddings
-        const int approx_total_tensors = n_layer * 7 + 2;  // rough estimate
-        const int max_enhanced = (int)(approx_total_tensors * enhancement_threshold);
+        // For small models (≤1.7B), use hardcoded critical tensors (more reliable)
+        // For larger models, use percentage-based threshold
+        int max_enhanced;
+        if (model_params_b <= 1.7f) {
+            // Small models: hardcode to 3 tensors (output.weight + 2 last FFN down)
+            max_enhanced = 3;
+        } else {
+            // Larger models: use percentage threshold
+            const float enhancement_threshold = get_q2_hifi_enhancement_threshold(model_params_b);
+            const int approx_total_tensors = n_layer * 7 + 2;  // rough estimate
+            max_enhanced = (int)(approx_total_tensors * enhancement_threshold);
+        }
         
         // Extract layer number from tensor name (e.g., "blk.5.ffn_down.weight" -> 5)
         int i_layer = -1;
