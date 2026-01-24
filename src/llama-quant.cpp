@@ -154,21 +154,15 @@ static bool should_enhance_q2k_tensor(
     int layer_threshold = (int)(n_layer * 0.9f);
     
     // Only the most critical tensor types in the final layers
+    // REFINED: Only enhance ffn_down (not ffn_up) - down-projections are more critical
     if (i_layer >= layer_threshold) {
-        // FFN layers are most critical for output quality
-        if (name.find("ffn_down") != std::string::npos ||
-            name.find("ffn_up") != std::string::npos) {
+        // Only ffn_down is enhanced - ffn_up removed as it's less critical
+        if (name.find("ffn_down") != std::string::npos) {
             return true;
         }
     }
     
-    // Very late layers (last 5%): also enhance attn_output for final attention
-    int late_threshold = (int)(n_layer * 0.95f);
-    if (i_layer >= late_threshold) {
-        if (name.find("attn_output") != std::string::npos) {
-            return true;
-        }
-    }
+    // REMOVED: attn_output enhancement - attention layers don't benefit as much from HIFI
     
     return false;
 }
@@ -1004,6 +998,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         if (should_enhance_q2k_tensor(name, i_layer, n_layer, qs.n_q2k_enhanced, max_enhanced)) {
             new_type = GGML_TYPE_Q2_K_HIFI;
             qs.n_q2k_enhanced++;
+            // Debug: log which tensors are being enhanced
+            fprintf(stderr, "Q2_K_HIFI: Enhancing tensor '%s' (layer %d/%d, enhanced %d/%d)\n",
+                    name.c_str(), i_layer, n_layer, qs.n_q2k_enhanced, max_enhanced);
         }
     }
 
