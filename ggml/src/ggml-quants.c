@@ -1449,7 +1449,7 @@ void quantize_row_q2_k_hifi_ref(const float * GGML_RESTRICT x, block_q2_k_hifi *
         const float * xb = x + ib * Q2_K_HIFI_BLOCK_SIZE;
         block_q2_k_hifi * block = &y[ib];
 
-        // Step 1: Find top-12 outliers by absolute magnitude
+        // Step 1: Find top outliers by absolute magnitude (no imatrix available)
         float abs_vals[Q2_K_HIFI_BLOCK_SIZE];
         for (int i = 0; i < Q2_K_HIFI_BLOCK_SIZE; ++i) {
             abs_vals[i] = fabsf(xb[i]);
@@ -1518,30 +1518,54 @@ static void quantize_row_q2_k_hifi_impl(const float * GGML_RESTRICT x, block_q2_
         const float * qw = quant_weights ? quant_weights + ib * Q2_K_HIFI_BLOCK_SIZE : NULL;
         block_q2_k_hifi * block = &y[ib];
 
-        // Step 1: Find top-12 outliers by WEIGHTED absolute magnitude
+        // Step 1: Find outliers by WEIGHTED absolute magnitude with imatrix threshold
         // Weight by importance (imatrix) if available - prioritize protecting important weights
+        // Only consider weights with high imatrix values to avoid "outlier pollution"
+        float max_imatrix = 0.0f;
+        if (qw) {
+            // Find maximum imatrix value in this block
+            for (int i = 0; i < Q2_K_HIFI_BLOCK_SIZE; ++i) {
+                if (qw[i] > max_imatrix) {
+                    max_imatrix = qw[i];
+                }
+            }
+        }
+        const float imatrix_threshold = qw ? (0.5f * max_imatrix) : 0.0f;
+        
         float weighted_abs[Q2_K_HIFI_BLOCK_SIZE];
         for (int i = 0; i < Q2_K_HIFI_BLOCK_SIZE; ++i) {
-            weighted_abs[i] = fabsf(xb[i]) * (qw ? qw[i] : 1.0f);
+            // Only consider weights with sufficient imatrix importance
+            if (qw && qw[i] < imatrix_threshold) {
+                weighted_abs[i] = -1.0f;  // Mark as ineligible
+            } else {
+                weighted_abs[i] = fabsf(xb[i]) * (qw ? qw[i] : 1.0f);
+            }
         }
 
         int outlier_indices[Q2_K_HIFI_OUTLIERS];
+        int n_outliers_found = 0;
         for (int k_idx = 0; k_idx < Q2_K_HIFI_OUTLIERS; ++k_idx) {
-            int argmax = 0;
-            float max_val = weighted_abs[0];
-            for (int i = 1; i < Q2_K_HIFI_BLOCK_SIZE; ++i) {
+            int argmax = -1;
+            float max_val = -1.0f;
+            // Find the maximum among eligible weights
+            for (int i = 0; i < Q2_K_HIFI_BLOCK_SIZE; ++i) {
                 if (weighted_abs[i] > max_val) {
                     max_val = weighted_abs[i];
                     argmax = i;
                 }
             }
+            // If no eligible weights found, stop early
+            if (argmax < 0 || max_val < 0.0f) {
+                break;
+            }
             outlier_indices[k_idx] = argmax;
+            n_outliers_found++;
             weighted_abs[argmax] = -1.0f;  // mask out
         }
 
         // Step 2: Create CLEANED copy with outliers ZEROED
         bool is_outlier[Q2_K_HIFI_BLOCK_SIZE] = {false};
-        for (int k_idx = 0; k_idx < Q2_K_HIFI_OUTLIERS; ++k_idx) {
+        for (int k_idx = 0; k_idx < n_outliers_found; ++k_idx) {
             is_outlier[outlier_indices[k_idx]] = true;
         }
 
@@ -1566,9 +1590,9 @@ static void quantize_row_q2_k_hifi_impl(const float * GGML_RESTRICT x, block_q2_
 
         // Step 6: Store outlier indices and RESIDUALS (original - reconstruction)
         // This ensures vec_dot can ADD residuals and get correct result
-        block->outlier_count = Q2_K_HIFI_OUTLIERS;
+        block->outlier_count = n_outliers_found;
         block->_pad = 0;
-        for (int k_idx = 0; k_idx < Q2_K_HIFI_OUTLIERS; ++k_idx) {
+        for (int k_idx = 0; k_idx < n_outliers_found; ++k_idx) {
             const int idx = outlier_indices[k_idx];
             block->outlier_idx[k_idx] = (uint8_t)idx;
             // Store RESIDUAL = original - reconstruction (for ADD semantics in dequant & vec_dot)

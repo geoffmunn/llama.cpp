@@ -278,10 +278,10 @@ static_assert(sizeof(block_q2_K) == 2*sizeof(ggml_half) + QK_K/16 + QK_K/4, "wro
 
 // Q2_K_HIFI: Q2_K with FP16 residual correction for improved accuracy at 2-bit
 // Uses residual-based outlier selection to correct weights that Q2_K fails on
-// 6 outliers provide sufficient correction while minimizing BPW overhead
-// Reduced from 12 to 6 for better efficiency on small models
+// 4 outliers provide sufficient correction while minimizing BPW overhead
+// Reduced from 6 to 4 for better efficiency and quality on small models
 #define Q2_K_HIFI_BLOCK_SIZE 256
-#define Q2_K_HIFI_OUTLIERS 6
+#define Q2_K_HIFI_OUTLIERS 4
 typedef struct {
     // === Q2_K-COMPATIBLE REGION (84 bytes) - DO NOT REORDER ===
     // Layout matches block_q2_K exactly for the first 84 bytes
