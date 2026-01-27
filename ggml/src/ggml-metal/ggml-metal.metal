@@ -892,24 +892,35 @@ void dequantize_iq4_xs(device const block_iq4_xs * xb, short il, thread type4x4 
 
 template <typename type4x4>
 void dequantize_q3_k_hifi(device const block_q3_k_hifi * xb, short il, thread type4x4 & reg) {
-    // Q3_K_HIFI uses true outlier extraction: Q3_K block + outlier indices + original outlier values
-    // Step 1: Dequantize Q3_K from first 110 bytes
+    // Q3_K_HIFI_RES16: True outlier extraction with imatrix-guided selection
+    // Step 1: Dequantize Q3_K from first 110 bytes (inliers-only, zeros at outlier positions)
     const device block_q3_K * q3k_block = (const device block_q3_K *)xb->q3_k_data;
     dequantize_q3_K(q3k_block, il, reg);
     
-    // Step 2: Overwrite outlier positions with stored FP16 values
+    // Step 2: Restore original outliers at correct positions using unrolled check (GPU-friendly)
     int base_pos = il * 16;
     for (int i = 0; i < 16; ++i) {
         int pos = base_pos + i;
         if (pos >= Q3_K_HIFI_BLOCK_SIZE) break;
         
-        // Check if this position is an outlier
-        for (int k = 0; k < Q3_K_HIFI_OUTLIERS; ++k) {
-            if (xb->outlier_idx[k] == pos) {
-                reg[i/4][i%4] = (float)xb->outliers[k];
-                break;
-            }
-        }
+        // Unrolled check: is this position one of the 16 outliers?
+        // This avoids divergent branching and improves GPU performance
+        if (pos == xb->outlier_idx[0])  { reg[i/4][i%4] = (float)xb->outliers[0];  continue; }
+        if (pos == xb->outlier_idx[1])  { reg[i/4][i%4] = (float)xb->outliers[1];  continue; }
+        if (pos == xb->outlier_idx[2])  { reg[i/4][i%4] = (float)xb->outliers[2];  continue; }
+        if (pos == xb->outlier_idx[3])  { reg[i/4][i%4] = (float)xb->outliers[3];  continue; }
+        if (pos == xb->outlier_idx[4])  { reg[i/4][i%4] = (float)xb->outliers[4];  continue; }
+        if (pos == xb->outlier_idx[5])  { reg[i/4][i%4] = (float)xb->outliers[5];  continue; }
+        if (pos == xb->outlier_idx[6])  { reg[i/4][i%4] = (float)xb->outliers[6];  continue; }
+        if (pos == xb->outlier_idx[7])  { reg[i/4][i%4] = (float)xb->outliers[7];  continue; }
+        if (pos == xb->outlier_idx[8])  { reg[i/4][i%4] = (float)xb->outliers[8];  continue; }
+        if (pos == xb->outlier_idx[9])  { reg[i/4][i%4] = (float)xb->outliers[9];  continue; }
+        if (pos == xb->outlier_idx[10]) { reg[i/4][i%4] = (float)xb->outliers[10]; continue; }
+        if (pos == xb->outlier_idx[11]) { reg[i/4][i%4] = (float)xb->outliers[11]; continue; }
+        if (pos == xb->outlier_idx[12]) { reg[i/4][i%4] = (float)xb->outliers[12]; continue; }
+        if (pos == xb->outlier_idx[13]) { reg[i/4][i%4] = (float)xb->outliers[13]; continue; }
+        if (pos == xb->outlier_idx[14]) { reg[i/4][i%4] = (float)xb->outliers[14]; continue; }
+        if (pos == xb->outlier_idx[15]) { reg[i/4][i%4] = (float)xb->outliers[15]; continue; }
     }
 }
 
