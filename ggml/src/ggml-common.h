@@ -316,19 +316,25 @@ typedef struct {
     // Next 32 bytes: original outlier values as FP16 (only first n_outliers are valid)
     ggml_half outliers[Q3_K_HIFI_OUTLIERS];
     
-    // Final padding to make total size exactly 161 bytes
-    // C: 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 = 161
-    // Metal: 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 = 161
+    // Final padding to make total size exactly 162 bytes
+    // C with #pragma pack(1): 110 + 1 + 16 + 1 (_align_pad) + 32 + 2 = 162
+    // Metal (natural alignment): 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 (padding) + 1 (struct alignment) = 162
+    // Metal adds 1 byte at the end to align struct to 2-byte boundary (since it contains half arrays)
+#if defined(GGML_COMMON_DECL_METAL)
     uint8_t padding[1];
+#else
+    uint8_t padding[2];
+#endif
 } block_q3_k_hifi;
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(pop)
 #endif
-// Size calculation (same layout in both C and Metal):
-// 110 (q3_k_data) + 1 (n_outliers) + 16 (outlier_idx) + 1 (_align_pad) + 32 (outliers) + 1 (padding) = 161 bytes
+// Size calculation:
+// C with #pragma pack(1): 110 (q3_k_data) + 1 (n_outliers) + 16 (outlier_idx) + 1 (_align_pad) + 32 (outliers) + 2 (padding) = 162 bytes
+// Metal (natural alignment): 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 (padding) + 1 (struct end alignment) = 162 bytes
 // The _align_pad ensures the half array starts at 2-byte aligned offset (128) in Metal
-// In C with #pragma pack(1), _align_pad is just a byte but maintains same layout for compatibility
-static_assert(sizeof(block_q3_k_hifi) == 161, "wrong q3_k_hifi block size/padding (must be 161 bytes)");
+// Metal adds 1 byte at struct end to align to 2-byte boundary (since struct contains half arrays)
+static_assert(sizeof(block_q3_k_hifi) == 162, "wrong q3_k_hifi block size/padding (must be 162 bytes)");
 
 // Q3_K_HIFI_RES8: Lean version with INT8 residuals for use WITH imatrix
 // When imatrix is present, base quantization is already optimized - INT8 residuals suffice
