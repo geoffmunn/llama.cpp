@@ -1343,13 +1343,13 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
         }
         
         for (int test_idx = 0; test_idx < num_tests; ++test_idx) {
-            int k = test_counts[test_idx];
-            if (k > max_outliers) k = max_outliers;
+            int test_k = test_counts[test_idx];
+            if (test_k > max_outliers) test_k = max_outliers;
             
-            // Zero out top-k outliers
+            // Zero out top-test_k outliers
             float temp[Q3_K_HIFI_BLOCK_SIZE];
             memcpy(temp, xb, Q3_K_HIFI_BLOCK_SIZE * sizeof(float));
-            for (int idx = 0; idx < k; ++idx) {
+            for (int idx = 0; idx < test_k; ++idx) {
                 temp[sorted_indices[idx]] = 0.0f;
             }
             
@@ -1370,7 +1370,7 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
             // Track best (lowest error)
             if (max_err < min_max_error) {
                 min_max_error = max_err;
-                best_k = k;
+                best_k = test_k;
             }
             
             // Early exit if good enough
@@ -1493,13 +1493,13 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
         }
         
         for (int test_idx = 0; test_idx < num_tests; ++test_idx) {
-            int k = test_counts[test_idx];
-            if (k > max_outliers) k = max_outliers;
+            int test_k = test_counts[test_idx];
+            if (test_k > max_outliers) test_k = max_outliers;
             
-            // Zero out top-k outliers
+            // Zero out top-test_k outliers
             float temp[Q3_K_HIFI_BLOCK_SIZE];
             memcpy(temp, xb, Q3_K_HIFI_BLOCK_SIZE * sizeof(float));
-            for (int idx = 0; idx < k; ++idx) {
+            for (int idx = 0; idx < test_k; ++idx) {
                 temp[sorted_indices[idx]] = 0.0f;
             }
             
@@ -1520,7 +1520,7 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
             // Track best (lowest error)
             if (max_err < min_max_error) {
                 min_max_error = max_err;
-                best_k = k;
+                best_k = test_k;
             }
             
             // Early exit if good enough
@@ -1581,20 +1581,20 @@ void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * G
         dequantize_row_q3_K(q3k_block, yb, Q3_K_HIFI_BLOCK_SIZE);
 
         // Step 2: Restore original outlier values (overwrite Q3_K reconstruction at outlier positions)
-        // Q3_K_HIFI_RES16: True outlier extraction - restore exact original values
-        for (int outlier_k = 0; outlier_k < Q3_K_HIFI_OUTLIERS; ++outlier_k) {
+        // Q3_K_HIFI: Dynamic outlier extraction - restore exact original values
+        uint8_t n_out = block->n_outliers;
+        for (int outlier_k = 0; outlier_k < n_out; ++outlier_k) {
             uint8_t idx = block->outlier_idx[outlier_k];
-            if (idx < Q3_K_HIFI_BLOCK_SIZE) {
+            // idx is uint8_t (0-255), Q3_K_HIFI_BLOCK_SIZE is 256, so idx is always < 256
+            // But we keep the check for safety and clarity
+            if ((int)idx < Q3_K_HIFI_BLOCK_SIZE) {
                 ggml_fp16_t outlier_fp16 = block->outliers[outlier_k];
-                // Skip zero outliers (unused slots)
-                if (outlier_fp16 != 0) {
-                    float outlier_val = GGML_FP16_TO_FP32(outlier_fp16);
-                    yb[idx] = outlier_val;  // Restore original value (overwrites Q3_K reconstruction)
-                    total_outliers_applied++;
-                    float abs_val = fabsf(outlier_val);
-                    if (abs_val > max_outlier_val) {
-                        max_outlier_val = abs_val;
-                    }
+                float outlier_val = GGML_FP16_TO_FP32(outlier_fp16);
+                yb[idx] = outlier_val;  // Restore original value (overwrites Q3_K reconstruction)
+                total_outliers_applied++;
+                float abs_val = fabsf(outlier_val);
+                if (abs_val > max_outlier_val) {
+                    max_outlier_val = abs_val;
                 }
             }
         }
