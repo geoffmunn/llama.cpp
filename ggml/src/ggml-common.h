@@ -318,9 +318,9 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // Size: 110 (Q3_K) + 1 (n_outliers) + 16 (idx) + 32 (outliers) + 1 (pad) = 160 bytes
-// Note: In Metal, structs may have different alignment, so we check >= 160 instead of == 160
+// Note: In Metal/CUDA, sizeof(ggml_half) in static_assert may not evaluate correctly, so use constant
 #if defined(GGML_COMMON_DECL_METAL) || defined(GGML_COMMON_DECL_CUDA) || defined(GGML_COMMON_DECL_HIP)
-static_assert(sizeof(block_q3_k_hifi) >= 160, "wrong q3_k_hifi block size/padding");
+static_assert(sizeof(block_q3_k_hifi) == 160, "wrong q3_k_hifi block size/padding");
 #else
 static_assert(sizeof(block_q3_k_hifi) == 110 + 1 + Q3_K_HIFI_OUTLIERS + Q3_K_HIFI_OUTLIERS*sizeof(ggml_half) + 1, "wrong q3_k_hifi block size/padding");
 #endif
