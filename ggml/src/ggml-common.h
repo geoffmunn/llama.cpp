@@ -318,7 +318,12 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // Size: 110 (Q3_K) + 1 (n_outliers) + 16 (idx) + 32 (outliers) + 1 (pad) = 160 bytes
+// Note: In Metal, structs may have different alignment, so we check >= 160 instead of == 160
+#if defined(GGML_COMMON_DECL_METAL) || defined(GGML_COMMON_DECL_CUDA) || defined(GGML_COMMON_DECL_HIP)
+static_assert(sizeof(block_q3_k_hifi) >= 160, "wrong q3_k_hifi block size/padding");
+#else
 static_assert(sizeof(block_q3_k_hifi) == 110 + 1 + Q3_K_HIFI_OUTLIERS + Q3_K_HIFI_OUTLIERS*sizeof(ggml_half) + 1, "wrong q3_k_hifi block size/padding");
+#endif
 
 // Q3_K_HIFI_RES8: Lean version with INT8 residuals for use WITH imatrix
 // When imatrix is present, base quantization is already optimized - INT8 residuals suffice

@@ -7376,10 +7376,12 @@ void kernel_mul_mv_q3_k_hifi_f32_impl(
                 // We need to add the outlier values directly
                 for (int k = 0; k < n_out; ++k) {
                     uint8_t idx = xb->outlier_idx[k];
-                    if (idx < Q3_K_HIFI_BLOCK_SIZE && idx >= y_offset && idx < y_offset + 32) {
+                    // idx is uint8_t (0-255), so (int)idx is always < 256, but we check for safety
+                    int idx_int = (int)idx;
+                    if (idx_int >= y_offset && idx_int < y_offset + 32 && idx_int < Q3_K_HIFI_BLOCK_SIZE) {
                         half outlier_fp16 = xb->outliers[k];
                         float outlier_val = (float)outlier_fp16;
-                        q3k_sum += outlier_val * y1[idx - y_offset];
+                        q3k_sum += outlier_val * y1[idx_int - y_offset];
                     }
                 }
             }
