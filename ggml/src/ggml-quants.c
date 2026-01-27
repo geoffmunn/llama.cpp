@@ -1303,57 +1303,100 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
             block_q3_K q3k_block;
             quantize_row_q3_K_ref(xb, &q3k_block, Q3_K_HIFI_BLOCK_SIZE);
             memcpy(block->q3_k_data, &q3k_block, 110);
+            block->n_outliers = 0;
             memset(block->outlier_idx, 0, sizeof(block->outlier_idx));
             memset(block->outliers, 0, sizeof(block->outliers));
             memset(block->padding, 0, sizeof(block->padding));
             continue;
         }
 
-        // === TRUE OUTLIER EXTRACTION (like Q5_K_HIFI_RES8) ===
-        // Step 1: Find top-16 outliers by |weight| * importance
-        // Use magnitude as importance score (imatrix not available in ref impl)
+        // === DYNAMIC OUTLIER EXTRACTION (test 0-16 outliers, pick best) ===
+        // Step 1: Score weights by |weight| (imatrix not available in ref impl)
         float importance[Q3_K_HIFI_BLOCK_SIZE];
+        int sorted_indices[Q3_K_HIFI_BLOCK_SIZE];
         for (int i = 0; i < Q3_K_HIFI_BLOCK_SIZE; ++i) {
             importance[i] = fabsf(xb[i]);
+            sorted_indices[i] = i;
         }
-
-        // Step 2: Select TOP-16 most important weights → these become outliers
-        int outlier_indices[Q3_K_HIFI_OUTLIERS];
-        bool is_outlier[Q3_K_HIFI_BLOCK_SIZE] = {false};
         
-        for (int outlier_k = 0; outlier_k < max_outliers; ++outlier_k) {
-            int argmax = 0;
-            float max_val = importance[0];
-            for (int i = 1; i < Q3_K_HIFI_BLOCK_SIZE; ++i) {
-                if (!is_outlier[i] && importance[i] > max_val) {
-                    max_val = importance[i];
-                    argmax = i;
+        // Sort indices by importance (descending)
+        for (int i = 0; i < Q3_K_HIFI_BLOCK_SIZE - 1; ++i) {
+            for (int j = i + 1; j < Q3_K_HIFI_BLOCK_SIZE; ++j) {
+                if (importance[sorted_indices[j]] > importance[sorted_indices[i]]) {
+                    int tmp = sorted_indices[i];
+                    sorted_indices[i] = sorted_indices[j];
+                    sorted_indices[j] = tmp;
                 }
             }
-            outlier_indices[outlier_k] = argmax;
-            is_outlier[argmax] = true;
-            importance[argmax] = -1.0f;  // mask out
         }
 
-        // Step 3: Store original outlier values (not residuals!)
-        for (int outlier_k = 0; outlier_k < max_outliers; ++outlier_k) {
-            const int idx = outlier_indices[outlier_k];
+        // Step 2: Test different numbers of outliers (0, 4, 8, 12, 16) and pick best
+        const float ERROR_THRESHOLD_ABS = 0.1f;
+        int best_k = 0;
+        float min_max_error = FLT_MAX;
+        
+        // Test k = 0, 4, 8, 12, 16 (or up to max_outliers)
+        int test_counts[] = {0, 4, 8, 12, 16};
+        int num_tests = 5;
+        if (max_outliers < 16) {
+            num_tests = (max_outliers / 4) + 1;
+        }
+        
+        for (int test_idx = 0; test_idx < num_tests; ++test_idx) {
+            int k = test_counts[test_idx];
+            if (k > max_outliers) k = max_outliers;
+            
+            // Zero out top-k outliers
+            float temp[Q3_K_HIFI_BLOCK_SIZE];
+            memcpy(temp, xb, Q3_K_HIFI_BLOCK_SIZE * sizeof(float));
+            for (int idx = 0; idx < k; ++idx) {
+                temp[sorted_indices[idx]] = 0.0f;
+            }
+            
+            // Quantize inliers
+            block_q3_K test_q3k;
+            quantize_row_q3_K_ref(temp, &test_q3k, Q3_K_HIFI_BLOCK_SIZE);
+            
+            // Reconstruct and compute max error
+            float recon[Q3_K_HIFI_BLOCK_SIZE];
+            dequantize_row_q3_K(&test_q3k, recon, Q3_K_HIFI_BLOCK_SIZE);
+            
+            float max_err = 0.0f;
+            for (int j = 0; j < Q3_K_HIFI_BLOCK_SIZE; ++j) {
+                float err = fabsf(xb[j] - recon[j]);
+                if (err > max_err) max_err = err;
+            }
+            
+            // Track best (lowest error)
+            if (max_err < min_max_error) {
+                min_max_error = max_err;
+                best_k = k;
+            }
+            
+            // Early exit if good enough
+            if (max_err < ERROR_THRESHOLD_ABS) break;
+        }
+
+        // Step 3: Final quantization with best_k outliers
+        float inliers_only[Q3_K_HIFI_BLOCK_SIZE];
+        memcpy(inliers_only, xb, Q3_K_HIFI_BLOCK_SIZE * sizeof(float));
+        
+        for (int outlier_k = 0; outlier_k < best_k; ++outlier_k) {
+            int idx = sorted_indices[outlier_k];
             block->outlier_idx[outlier_k] = (uint8_t)idx;
             block->outliers[outlier_k] = GGML_FP32_TO_FP16(xb[idx]);
+            inliers_only[idx] = 0.0f;
         }
+        
         // Zero out unused outlier slots
-        for (int outlier_k = max_outliers; outlier_k < Q3_K_HIFI_OUTLIERS; ++outlier_k) {
+        for (int outlier_k = best_k; outlier_k < Q3_K_HIFI_OUTLIERS; ++outlier_k) {
             block->outlier_idx[outlier_k] = 0;
             block->outliers[outlier_k] = 0;
         }
-
-        // Step 4: Zero out outliers and quantize inliers with standard Q3_K
-        float inliers_only[Q3_K_HIFI_BLOCK_SIZE];
-        for (int i = 0; i < Q3_K_HIFI_BLOCK_SIZE; ++i) {
-            inliers_only[i] = is_outlier[i] ? 0.0f : xb[i];
-        }
-
-        // Step 5: Quantize inliers with standard Q3_K (no imatrix - already used for outlier selection)
+        
+        block->n_outliers = (uint8_t)best_k;
+        
+        // Step 4: Quantize inliers with standard Q3_K
         block_q3_K q3k_block;
         quantize_row_q3_K_ref(inliers_only, &q3k_block, Q3_K_HIFI_BLOCK_SIZE);
         memcpy(block->q3_k_data, &q3k_block, 110);
@@ -1366,17 +1409,17 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
             quant_debug_enabled = (getenv("Q3_K_HIFI_DEBUG") != NULL);
             quant_debug_checked = true;
             if (quant_debug_enabled) {
-                GGML_LOG_INFO("Q3_K_HIFI: Debug logging enabled. True outlier extraction active.\n");
+                GGML_LOG_INFO("Q3_K_HIFI: Debug logging enabled. Dynamic outlier extraction active.\n");
             }
         }
         if (quant_debug_enabled && ib < 5) {
             float max_outlier_val = 0.0f;
-            for (int outlier_k = 0; outlier_k < max_outliers; ++outlier_k) {
+            for (int outlier_k = 0; outlier_k < best_k; ++outlier_k) {
                 float val = fabsf(GGML_FP16_TO_FP32(block->outliers[outlier_k]));
                 if (val > max_outlier_val) max_outlier_val = val;
             }
-            GGML_LOG_INFO("Q3_K_HIFI: quantize_row block %ld: extracted %d outliers (zeroed before Q3_K), max outlier: %.6f\n",
-                         (long)ib, max_outliers, (double)max_outlier_val);
+            GGML_LOG_INFO("Q3_K_HIFI: quantize_row block %ld: dynamic outliers=%d (tested 0-%d), max_error=%.6f, max_outlier=%.6f\n",
+                         (long)ib, best_k, max_outliers, (double)min_max_error, (double)max_outlier_val);
         }
     }
 }
@@ -1407,59 +1450,103 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
             quantize_row_q3_K_ref(xb, &q3k_block, Q3_K_HIFI_BLOCK_SIZE);
             // Copy Q3_K block to q3_k_data, no outliers
             memcpy(block->q3_k_data, &q3k_block, 110);
+            block->n_outliers = 0;
             memset(block->outlier_idx, 0, sizeof(block->outlier_idx));
             memset(block->outliers, 0, sizeof(block->outliers));
             memset(block->padding, 0, sizeof(block->padding));
             continue;
         }
 
-        // === TRUE OUTLIER EXTRACTION (with imatrix weighting) ===
+        // === DYNAMIC OUTLIER EXTRACTION (with imatrix weighting) ===
         // Step 1: Score weights by importance (use imatrix if available)
         float importance[Q3_K_HIFI_BLOCK_SIZE];
+        int sorted_indices[Q3_K_HIFI_BLOCK_SIZE];
         for (int i = 0; i < Q3_K_HIFI_BLOCK_SIZE; ++i) {
             // Weight by imatrix if available, otherwise use magnitude
             float base_importance = fabsf(xb[i]);
             float imatrix_weight = qw ? qw[i] : 1.0f;
             importance[i] = base_importance * imatrix_weight;
+            sorted_indices[i] = i;
         }
-
-        // Step 2: Select TOP-16 most important weights → these become outliers
-        int outlier_indices[Q3_K_HIFI_OUTLIERS];
-        bool is_outlier[Q3_K_HIFI_BLOCK_SIZE] = {false};
         
-        for (int outlier_k = 0; outlier_k < max_outliers; ++outlier_k) {
-            int argmax = 0;
-            float max_val = importance[0];
-            for (int i = 1; i < Q3_K_HIFI_BLOCK_SIZE; ++i) {
-                if (!is_outlier[i] && importance[i] > max_val) {
-                    max_val = importance[i];
-                    argmax = i;
+        // Sort indices by importance (descending)
+        for (int i = 0; i < Q3_K_HIFI_BLOCK_SIZE - 1; ++i) {
+            for (int j = i + 1; j < Q3_K_HIFI_BLOCK_SIZE; ++j) {
+                if (importance[sorted_indices[j]] > importance[sorted_indices[i]]) {
+                    int tmp = sorted_indices[i];
+                    sorted_indices[i] = sorted_indices[j];
+                    sorted_indices[j] = tmp;
                 }
             }
-            outlier_indices[outlier_k] = argmax;
-            is_outlier[argmax] = true;
-            importance[argmax] = -1.0f;  // mask out
         }
 
-        // Step 3: Store original outlier values (not residuals!)
-        for (int outlier_k = 0; outlier_k < max_outliers; ++outlier_k) {
-            const int idx = outlier_indices[outlier_k];
+        // Step 2: Test different numbers of outliers (0, 4, 8, 12, 16) and pick best
+        const float ERROR_THRESHOLD_ABS = 0.1f;
+        int best_k = 0;
+        float min_max_error = FLT_MAX;
+        
+        // Test k = 0, 4, 8, 12, 16 (or up to max_outliers)
+        int test_counts[] = {0, 4, 8, 12, 16};
+        int num_tests = 5;
+        if (max_outliers < 16) {
+            num_tests = (max_outliers / 4) + 1;
+        }
+        
+        for (int test_idx = 0; test_idx < num_tests; ++test_idx) {
+            int k = test_counts[test_idx];
+            if (k > max_outliers) k = max_outliers;
+            
+            // Zero out top-k outliers
+            float temp[Q3_K_HIFI_BLOCK_SIZE];
+            memcpy(temp, xb, Q3_K_HIFI_BLOCK_SIZE * sizeof(float));
+            for (int idx = 0; idx < k; ++idx) {
+                temp[sorted_indices[idx]] = 0.0f;
+            }
+            
+            // Quantize inliers
+            block_q3_K test_q3k;
+            quantize_row_q3_K_impl(temp, &test_q3k, Q3_K_HIFI_BLOCK_SIZE, NULL);
+            
+            // Reconstruct and compute max error
+            float recon[Q3_K_HIFI_BLOCK_SIZE];
+            dequantize_row_q3_K(&test_q3k, recon, Q3_K_HIFI_BLOCK_SIZE);
+            
+            float max_err = 0.0f;
+            for (int j = 0; j < Q3_K_HIFI_BLOCK_SIZE; ++j) {
+                float err = fabsf(xb[j] - recon[j]);
+                if (err > max_err) max_err = err;
+            }
+            
+            // Track best (lowest error)
+            if (max_err < min_max_error) {
+                min_max_error = max_err;
+                best_k = k;
+            }
+            
+            // Early exit if good enough
+            if (max_err < ERROR_THRESHOLD_ABS) break;
+        }
+
+        // Step 3: Final quantization with best_k outliers
+        float inliers_only[Q3_K_HIFI_BLOCK_SIZE];
+        memcpy(inliers_only, xb, Q3_K_HIFI_BLOCK_SIZE * sizeof(float));
+        
+        for (int outlier_k = 0; outlier_k < best_k; ++outlier_k) {
+            int idx = sorted_indices[outlier_k];
             block->outlier_idx[outlier_k] = (uint8_t)idx;
             block->outliers[outlier_k] = GGML_FP32_TO_FP16(xb[idx]);
+            inliers_only[idx] = 0.0f;
         }
+        
         // Zero out unused outlier slots
-        for (int outlier_k = max_outliers; outlier_k < Q3_K_HIFI_OUTLIERS; ++outlier_k) {
+        for (int outlier_k = best_k; outlier_k < Q3_K_HIFI_OUTLIERS; ++outlier_k) {
             block->outlier_idx[outlier_k] = 0;
             block->outliers[outlier_k] = 0;
         }
-
-        // Step 4: Zero out outliers and quantize inliers with standard Q3_K
-        float inliers_only[Q3_K_HIFI_BLOCK_SIZE];
-        for (int i = 0; i < Q3_K_HIFI_BLOCK_SIZE; ++i) {
-            inliers_only[i] = is_outlier[i] ? 0.0f : xb[i];
-        }
-
-        // Step 5: Quantize inliers with standard Q3_K (no imatrix - already used for outlier selection)
+        
+        block->n_outliers = (uint8_t)best_k;
+        
+        // Step 4: Quantize inliers with standard Q3_K
         block_q3_K q3k_block;
         quantize_row_q3_K_impl(inliers_only, &q3k_block, Q3_K_HIFI_BLOCK_SIZE, NULL);
         memcpy(block->q3_k_data, &q3k_block, 110);
@@ -1478,7 +1565,7 @@ void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * G
         debug_enabled = (getenv("Q3_K_HIFI_DEBUG") != NULL);
         debug_checked = true;
         if (debug_enabled) {
-            GGML_LOG_INFO("Q3_K_HIFI: Debug logging enabled. True outlier extraction dequantization active.\n");
+            GGML_LOG_INFO("Q3_K_HIFI: Debug logging enabled. Dynamic outlier extraction dequantization active.\n");
         }
     }
 

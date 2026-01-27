@@ -607,15 +607,18 @@ void ggml_vec_dot_q3_k_hifi_q8_K_generic(int n, float * GGML_RESTRICT s, size_t 
             q3k_sum += q3k_weights[j] * (float)q8[j] * d_y;
         }
 
-        // Step 2: Add outlier corrections
-        // Outliers were zeroed before Q3_K quantization, so Q3_K contribution is ~0 at those positions
-        // We need to subtract the ~0 Q3_K contribution and add the original outlier value
-        for (int k = 0; k < Q3_K_HIFI_OUTLIERS; ++k) {
-            int idx = xb->outlier_idx[k];
-            if (idx < Q3_K_HIFI_BLOCK_SIZE) {
-                float outlier_val = GGML_FP16_TO_FP32(xb->outliers[k]);
-                float q3k_val = q3k_weights[idx];  // Should be ~0 since we zeroed it
-                q3k_sum += (outlier_val - q3k_val) * (float)q8[idx] * d_y;
+        // Step 2: Add outlier corrections (dynamic n_outliers)
+        uint8_t n_out = xb->n_outliers;
+        if (n_out > 0) {
+            // Outliers were zeroed before Q3_K quantization, so Q3_K contribution is ~0 at those positions
+            // We need to subtract the ~0 Q3_K contribution and add the original outlier value
+            for (int k = 0; k < n_out; ++k) {
+                uint8_t idx = xb->outlier_idx[k];
+                if (idx < Q3_K_HIFI_BLOCK_SIZE) {
+                    float outlier_val = GGML_FP16_TO_FP32(xb->outliers[k]);
+                    float q3k_val = q3k_weights[idx];  // Should be ~0 since we zeroed it
+                    q3k_sum += (outlier_val - q3k_val) * (float)q8[idx] * d_y;
+                }
             }
         }
 
