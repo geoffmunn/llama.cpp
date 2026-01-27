@@ -308,18 +308,26 @@ typedef struct {
     // Next 16 bytes: indices of outliers (only first n_outliers are valid)
     uint8_t outlier_idx[Q3_K_HIFI_OUTLIERS];
     
+    // Alignment padding: ensures half array is 2-byte aligned in Metal
+    // In C with #pragma pack(1), this is just a byte (no alignment effect)
+    // In Metal, this ensures outliers array starts at offset 128 (2-byte aligned)
+    uint8_t _align_pad;
+    
     // Next 32 bytes: original outlier values as FP16 (only first n_outliers are valid)
     ggml_half outliers[Q3_K_HIFI_OUTLIERS];
     
-    // Padding to make total size exactly 161 bytes (110 + 1 + 16 + 32 + 2 = 161)
-    uint8_t padding[2];
+    // Final padding to make total size exactly 161 bytes
+    // C: 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 = 161
+    // Metal: 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 = 161
+    uint8_t padding[1];
 } block_q3_k_hifi;
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(pop)
 #endif
-// Size: 110 (Q3_K) + 1 (n_outliers) + 16 (idx) + 1 (align_pad) + 32 (outliers) + 1 (pad) = 161 bytes
-// The _align_pad ensures consistent 161-byte size across all platforms
-// In C with #pragma pack(1), it's still 161 bytes. In Metal, it accounts for natural alignment.
+// Size calculation (same layout in both C and Metal):
+// 110 (q3_k_data) + 1 (n_outliers) + 16 (outlier_idx) + 1 (_align_pad) + 32 (outliers) + 1 (padding) = 161 bytes
+// The _align_pad ensures the half array starts at 2-byte aligned offset (128) in Metal
+// In C with #pragma pack(1), _align_pad is just a byte but maintains same layout for compatibility
 static_assert(sizeof(block_q3_k_hifi) == 161, "wrong q3_k_hifi block size/padding (must be 161 bytes)");
 
 // Q3_K_HIFI_RES8: Lean version with INT8 residuals for use WITH imatrix
