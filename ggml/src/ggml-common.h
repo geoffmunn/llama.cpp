@@ -298,7 +298,7 @@ static_assert(sizeof(block_q3_K) == sizeof(ggml_half) + QK_K / 4 + QK_K / 8 + 12
 #pragma pack(push, 1)
 #endif
 typedef struct {
-    // === DYNAMIC OUTLIER EXTRACTION LAYOUT (159 bytes, pad to 160) ===
+    // === DYNAMIC OUTLIER EXTRACTION LAYOUT ===
     // First 110 bytes: standard Q3_K block (for inliers with outliers zeroed)
     uint8_t q3_k_data[110];
     
@@ -308,22 +308,24 @@ typedef struct {
     // Next 16 bytes: indices of outliers (only first n_outliers are valid)
     uint8_t outlier_idx[Q3_K_HIFI_OUTLIERS];
     
+    // Alignment padding: Metal requires 2-byte alignment for half arrays
+    // In C with #pragma pack(1), this is still present but doesn't affect size calculation.
+    // In Metal, this ensures the half array is 2-byte aligned.
+    uint8_t _align_pad[1];
+    
     // Next 32 bytes: original outlier values as FP16 (only first n_outliers are valid)
     ggml_half outliers[Q3_K_HIFI_OUTLIERS];
     
-    // Padding to 160 bytes for alignment
+    // Final padding to ensure consistent 161-byte size
     uint8_t padding[1];
 } block_q3_k_hifi;
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(pop)
 #endif
-// Size: 110 (Q3_K) + 1 (n_outliers) + 16 (idx) + 32 (outliers) + 1 (pad) = 160 bytes
-// Note: In Metal/CUDA, sizeof(ggml_half) in static_assert may not evaluate correctly, so use constant
-#if defined(GGML_COMMON_DECL_METAL) || defined(GGML_COMMON_DECL_CUDA) || defined(GGML_COMMON_DECL_HIP)
-static_assert(sizeof(block_q3_k_hifi) == 160, "wrong q3_k_hifi block size/padding");
-#else
-static_assert(sizeof(block_q3_k_hifi) == 110 + 1 + Q3_K_HIFI_OUTLIERS + Q3_K_HIFI_OUTLIERS*sizeof(ggml_half) + 1, "wrong q3_k_hifi block size/padding");
-#endif
+// Size: 110 (Q3_K) + 1 (n_outliers) + 16 (idx) + 1 (align_pad) + 32 (outliers) + 1 (pad) = 161 bytes
+// The _align_pad ensures consistent 161-byte size across all platforms
+// In C with #pragma pack(1), it's still 161 bytes. In Metal, it accounts for natural alignment.
+static_assert(sizeof(block_q3_k_hifi) == 161, "wrong q3_k_hifi block size/padding (must be 161 bytes)");
 
 // Q3_K_HIFI_RES8: Lean version with INT8 residuals for use WITH imatrix
 // When imatrix is present, base quantization is already optimized - INT8 residuals suffice
