@@ -3373,6 +3373,15 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q3_K_HIFI> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q3_K_q8_1_dp4a<mmq_x, mmq_y>;  // Reuse Q3_K dot product (outliers handled separately)
 };
 
+// Q3_K_HIFI_RES8: Same as Q3_K (direct fields, not embedded)
+template <int mmq_x, int mmq_y, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q3_K_HIFI_RES8> {
+    static constexpr int              vdr          = VDR_Q3_K_Q8_1_MMQ;  // Same as Q3_K
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q3_K<mmq_y, need_check>;  // Reuse Q3_K loader (same layout)
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q3_K_q8_1_dp4a<mmq_x, mmq_y>;  // Reuse Q3_K dot product (INT8 residuals handled separately)
+};
+
 template <int mmq_x, int mmq_y, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q4_K> {
     static constexpr int              vdr          = VDR_Q4_K_Q8_1_MMQ;
