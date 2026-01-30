@@ -3272,6 +3272,107 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q3_K> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q3_K_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
+// Q3_K_HIFI: Same as Q3_K but accesses q3_k_data field from block_q3_k_hifi
+template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_q3_k_hifi(
+    const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
+    // Cast to block_q3_k_hifi and access q3_k_data as block_q3_K
+    // The stride is for block_q3_k_hifi, but we need to access q3_k_data (offset 0)
+    constexpr int nwarps = mmq_get_nwarps_device();
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + MMQ_TILE_NE_K*2);
+#else
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q3_K, mmq_y);
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + txs.qs);
+    int   * x_sc = (int   *) (x_df + txs.dm);
+#endif
+
+    constexpr int threads_per_row = MMQ_ITER_K / (4 * QR3_K);
+    constexpr int nrows = warp_size / threads_per_row;
+    const int kqsx = threadIdx.x % threads_per_row;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nrows*nwarps) {
+        int i = i0 + threadIdx.y*nrows + threadIdx.x/threads_per_row;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        // Access block_q3_k_hifi and cast q3_k_data to block_q3_K
+        const block_q3_k_hifi * bx_hifi = (const block_q3_k_hifi *) x + kbx0 + i*stride;
+        const block_q3_K * bxi = (const block_q3_K *)bx_hifi->q3_k_data;
+
+        const int x_ql_0 = get_int_b2(bxi->qs,    kqsx);
+        const int x_qh_0 = get_int_b2(bxi->hmask, kqsx % (QI3_K/2)) >> (4 * (kqsx / (QI3_K/2)));
+
+#pragma unroll
+        for (int l = 0; l < QR3_K; ++l) {
+            const int k = (kqsx/8)*32 + l*8 + kqsx % 8;
+
+            const int x_ql_k =  (x_ql_0 >> (2*l))       & 0x03030303;
+            const int x_qh_k = ((x_qh_0 >>    l)  << 2) & 0x04040404;
+
+            const int x_qs_k = __vsubss4(x_ql_k | x_qh_k, 0x04040404);
+
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + k] = x_qs_k;
+#else
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + k] = x_qs_k;
+#endif
+        }
+    }
+
+    constexpr int rows_per_warp = warp_size / 4;
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps*rows_per_warp) {
+        int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/4;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_q3_k_hifi * bx_hifi = (const block_q3_k_hifi *) x + kbx0 + i*stride;
+        const block_q3_K * bxi = (const block_q3_K *)bx_hifi->q3_k_data;
+
+        const int ksc = threadIdx.x % 4;
+
+        const int ksc_low = ksc % (QI3_K/8);
+        const int shift_low = 4 * (ksc / (QI3_K/8));
+        const int sc_low = (get_int_b2(bxi->scales, ksc_low) >> shift_low) & 0x0F0F0F0F;
+
+        const int ksc_high = QI3_K/8;
+        const int shift_high = 2 * ksc;
+        const int sc_high = ((get_int_b2(bxi->scales, ksc_high) >> shift_high) << 4) & 0x30303030;
+
+        const int sc = __vsubss4(sc_low | sc_high, 0x20202020);
+
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+        const int8_t * sc8 = (const int8_t *) &sc;
+        const float d = bxi->d;
+
+#pragma unroll
+        for (int l = 0; l < int(sizeof(int)); ++l) {
+            x_df[i*MMQ_MMA_TILE_X_K_Q3_K + sizeof(int)*ksc + l] = d*sc8[l];
+        }
+#else
+        x_sc[i*MMQ_TILE_NE_K + ksc] = sc;
+        x_df[i*(MMQ_TILE_NE_K/4) + ksc] = bxi->d;
+#endif
+    }
+}
+
+template <int mmq_x, int mmq_y, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q3_K_HIFI> {
+    static constexpr int              vdr          = VDR_Q3_K_Q8_1_MMQ;  // Same as Q3_K
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_q3_k_hifi<mmq_y, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q3_K_q8_1_dp4a<mmq_x, mmq_y>;  // Reuse Q3_K dot product (outliers handled separately)
+};
+
 template <int mmq_x, int mmq_y, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_Q4_K> {
     static constexpr int              vdr          = VDR_Q4_K_Q8_1_MMQ;
@@ -4059,6 +4160,8 @@ extern DECL_MMQ_CASE(GGML_TYPE_Q8_0);
 extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
 extern DECL_MMQ_CASE(GGML_TYPE_Q2_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q3_K);
+extern DECL_MMQ_CASE(GGML_TYPE_Q3_K_HIFI);
+extern DECL_MMQ_CASE(GGML_TYPE_Q3_K_HIFI_RES8);
 extern DECL_MMQ_CASE(GGML_TYPE_Q4_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q5_K);
 extern DECL_MMQ_CASE(GGML_TYPE_Q6_K);
