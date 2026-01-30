@@ -735,7 +735,7 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
         const int n_outliers = (x[i].n_outliers <= Q3_K_HIFI_OUTLIERS) ? x[i].n_outliers : Q3_K_HIFI_OUTLIERS;
         for (int k = 0; k < n_outliers; ++k) {
             const int idx = x[i].outlier_idx[k];
-            yb[idx] += __half2float(x[i].outlier_vals[k]);  // ADD residual correction
+            yb[idx] += __half2float(x[i].outliers[k]);  // ADD residual correction
         }
     }
 }

@@ -329,10 +329,10 @@ typedef struct {
 #endif
 // Size calculation:
 // C with #pragma pack(1): 110 (q3_k_data) + 1 (n_outliers) + 8 (outlier_idx) + 1 (_align_pad) + 16 (outliers) + 1 (padding) = 137 bytes
-// Metal: 110 + 1 + 8 + 1 (_align_pad) + 16 + padding = 136-137 bytes (Metal alignment rules)
-// Metal alignment is platform-dependent, so we skip the assert for Metal
+// Metal/CUDA: 110 + 1 + 8 + 1 (_align_pad) + 16 + padding = 136-137 bytes (platform-specific alignment rules)
+// Metal/CUDA alignment is platform-dependent, so we skip the assert for Metal/CUDA
 // Note: _align_pad is always written to disk to match Metal's expected layout
-#if !defined(GGML_COMMON_DECL_METAL)
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 static_assert(sizeof(block_q3_k_hifi) == 137, "wrong q3_k_hifi block size/padding (must be 137 bytes with _align_pad)");
 #endif
 
