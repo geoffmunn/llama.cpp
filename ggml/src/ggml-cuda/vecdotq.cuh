@@ -818,6 +818,11 @@ static __device__ __forceinline__ float vec_dot_q3_k_hifi_q8_1(
     for (int k = 0; k < n_outliers; ++k) {
         const int idx = bq3_k_hifi->outlier_idx[k];
 
+        // Bounds check to prevent out-of-bounds access
+        if (idx < 0 || idx >= QK_K) {
+            continue;
+        }
+
         // Determine which bq8 block this index falls into
         const int idx_bq8 = idx / QK8_1;  // Which Q8 block (0-7 for 256 weights)
         const int idx_in_bq8 = idx % QK8_1;  // Position within Q8 block (0-31)
