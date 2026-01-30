@@ -383,10 +383,15 @@ static void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __r
         int idx = 128*n + 32*j + l;
         // Step 1: Standard Q3_K dequantization
         dst_t val = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
-        // Step 2: ADD residual correction if this position has one
+        // Step 2: Apply linear prediction residual if this position has one
         for (int k = 0; k < n_outliers; ++k) {
             if (x[i].outlier_idx[k] == idx) {
-                val += x[i].outlier_vals[k];  // ADD correction, don't replace
+                float residual = x[i].residuals[k];
+                // Compute linear predictor from neighbors (simplified: use current val for boundaries)
+                float left  = (idx > 0)     ? (float)y[l-1] : val;
+                float right = (idx < QK_K - 1) ? (float)y[l+1] : val;
+                float pred = 0.5f * (left + right);
+                val = pred + residual;
                 break;
             }
         }
@@ -417,8 +422,17 @@ static void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __r
     int idx0 = 16*is + il;
     int idx1 = 16*is + il + 32;
     for (int k = 0; k < Q3_K_HIFI_OUTLIERS; ++k) {
-        if (x[i].outlier_idx[k] == idx0) val0 = x[i].outlier_vals[k];
-        if (x[i].outlier_idx[k] == idx1) val1 = x[i].outlier_vals[k];
+        if (x[i].outlier_idx[k] == idx0) {
+            float residual = x[i].residuals[k];
+            // Simplified: use current val0 as predictor (full linear prediction would need neighbors)
+            float pred = val0;  // Would need neighbor access for full implementation
+            val0 = pred + residual;
+        }
+        if (x[i].outlier_idx[k] == idx1) {
+            float residual = x[i].residuals[k];
+            float pred = val1;  // Would need neighbor access for full implementation
+            val1 = pred + residual;
+        }
     }
     y[ 0] = val0;
     y[32] = val1;

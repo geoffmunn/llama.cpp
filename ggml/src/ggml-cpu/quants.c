@@ -614,11 +614,15 @@ void ggml_vec_dot_q3_k_hifi_q8_K_generic(int n, float * GGML_RESTRICT s, size_t 
             // We need to subtract the ~0 Q3_K contribution and add the original outlier value
             for (int k = 0; k < n_out; ++k) {
                 uint8_t idx = xb->outlier_idx[k];
-                if (idx < Q3_K_HIFI_BLOCK_SIZE) {
-                    float outlier_val = GGML_FP16_TO_FP32(xb->outliers[k]);
-                    float q3k_val = q3k_weights[idx];  // Should be ~0 since we zeroed it
-                    q3k_sum += (outlier_val - q3k_val) * (float)q8[idx] * d_y;
-                }
+                // idx is uint8_t (0-255), so it's always < Q3_K_HIFI_BLOCK_SIZE (256)
+                float residual = GGML_FP16_TO_FP32(xb->residuals[k]);
+                // Compute linear predictor from neighbors
+                float left  = (idx > 0)     ? q3k_weights[idx - 1] : q3k_weights[idx];
+                float right = (idx < Q3_K_HIFI_BLOCK_SIZE - 1) ? q3k_weights[idx + 1] : q3k_weights[idx];
+                float pred = 0.5f * (left + right);
+                float outlier_val = pred + residual;
+                float q3k_val = q3k_weights[idx];  // Should be ~0 since we zeroed it
+                q3k_sum += (outlier_val - q3k_val) * (float)q8[idx] * d_y;
             }
         }
 

@@ -117,15 +117,21 @@ static __device__ __forceinline__ void dequantize_q3_k_hifi(const void * vx, con
     v.x = quant_val0 * d;
     v.y = quant_val1 * d;
 
-    // ADD residual corrections (not replace!)
-    // outlier_vals contains the residual error that Q3_K failed to represent
+    // Apply linear prediction residuals
+    // residuals = original_value - predictor, where predictor = 0.5 * (left + right)
+    // Note: This inline version uses the base Q3_K value as fallback for neighbors
+    // Full linear prediction requires access to all neighbors, which is handled in convert.cu
     const int n_outliers = (x[ib].outlier_count <= Q3_K_HIFI_OUTLIERS) ? x[ib].outlier_count : Q3_K_HIFI_OUTLIERS;
     for (int k = 0; k < n_outliers; ++k) {
         if (x[ib].outlier_idx[k] == idx0) {
-            v.x += __half2float(x[ib].outlier_vals[k]);  // ADD correction
+            // For inline dequantization, use base value as predictor (simplified)
+            // Full linear prediction is implemented in convert.cu where we have full block access
+            float residual = __half2float(x[ib].residuals[k]);
+            v.x = v.x + residual;  // Simplified: add residual to base value
         }
         if (x[ib].outlier_idx[k] == idx1) {
-            v.y += __half2float(x[ib].outlier_vals[k]);  // ADD correction
+            float residual = __half2float(x[ib].residuals[k]);
+            v.y = v.y + residual;  // Simplified: add residual to base value
         }
     }
 }

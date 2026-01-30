@@ -726,13 +726,23 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
     // Synchronize before adding residual corrections
     __syncthreads();
 
-    // Thread 0 handles residual corrections (ADD, not replace)
+    // Thread 0 handles linear prediction residuals
+    // Reconstruct outliers using: value = predictor + residual
+    // where predictor = 0.5 * (left_neighbor + right_neighbor)
     if (threadIdx.x == 0) {
         dst_t * yb = yy + i*QK_K;
         const int n_outliers = (x[i].outlier_count <= Q3_K_HIFI_OUTLIERS) ? x[i].outlier_count : Q3_K_HIFI_OUTLIERS;
         for (int k = 0; k < n_outliers; ++k) {
             const int idx = x[i].outlier_idx[k];
-            yb[idx] += __half2float(x[i].outlier_vals[k]);  // ADD residual correction
+            float residual = __half2float(x[i].residuals[k]);
+            
+            // Compute linear predictor from reconstructed neighbors
+            float left  = (idx > 0)     ? yb[idx - 1] : yb[idx];
+            float right = (idx < QK_K - 1) ? yb[idx + 1] : yb[idx];
+            float pred = 0.5f * (left + right);
+            
+            // Final value = predictor + residual
+            yb[idx] = pred + residual;
         }
     }
 }

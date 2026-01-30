@@ -45,10 +45,16 @@ void main() {
             // Standard Q3_K dequantization
             FLOAT_TYPE val = dl * FLOAT_TYPE(int8_t((data_a[i].qs[qs_idx + l] >> shift) & 3) - (((data_a[i].hmask[l] & m) != 0) ? 0 : 4));
 
-            // Q3_K_HIFI extension: Check if this is an outlier and replace with FP16 value
+            // Q3_K_HIFI extension: Restore outliers using linear prediction + residuals
             [[unroll]] for (uint k = 0; k < Q3_K_HIFI_OUTLIERS; ++k) {
                 if (data_a[i].outlier_idx[k] == local_idx) {
-                    val = FLOAT_TYPE(data_a[i].outlier_vals[k]);
+                    float residual = float(data_a[i].residuals[k]);
+                    // Compute linear predictor from neighbors (simplified: use current val for boundaries)
+                    float left  = (local_idx > 0) ? float(data_b[global_idx - 1]) : val;
+                    float right = (local_idx < QUANT_K - 1) ? float(data_b[global_idx + 1]) : val;
+                    float pred = 0.5f * (left + right);
+                    val = pred + residual;
+                    break;  // Only one outlier per position
                 }
             }
 

@@ -901,8 +901,8 @@ vec_dot_q3_k_hifi_q8_1(const void *__restrict__ vbq,
             const int thread_q8_offset = iqs % QI8_1;
             const int pos_in_q8_group = idx_in_bq8 / 4;
             if (pos_in_q8_group == thread_q8_offset) {
-                // outlier_vals now contains RESIDUAL correction, not original value
-                const float residual_correction = bq3_k_hifi->outlier_vals[k];
+                // residuals contains linear prediction residual
+                const float residual_correction = bq3_k_hifi->residuals[k];
                 const int8_t q8_val = ((const int8_t*)bq8_1[idx_bq8].qs)[idx_in_bq8];
                 const float d8_val = bq8_1[idx_bq8].ds[0];
                 sum += residual_correction * q8_val * d8_val;

@@ -313,8 +313,10 @@ typedef struct {
     // In Metal, this ensures outliers array starts at offset 128 (2-byte aligned)
     uint8_t _align_pad;
     
-    // Next 32 bytes: original outlier values as FP16 (only first n_outliers are valid)
-    ggml_half outliers[Q3_K_HIFI_OUTLIERS];
+    // Next 32 bytes: linear prediction residuals as FP16 (only first n_outliers are valid)
+    // Residual = original_value - predictor, where predictor = 0.5 * (left_neighbor + right_neighbor)
+    // This reduces entropy compared to storing raw outlier values
+    ggml_half residuals[Q3_K_HIFI_OUTLIERS];
     
     // Final padding to make total size exactly 162 bytes
     // C with #pragma pack(1): 110 + 1 + 16 + 1 (_align_pad) + 32 + 2 = 162
@@ -330,7 +332,7 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // Size calculation:
-// C with #pragma pack(1): 110 (q3_k_data) + 1 (n_outliers) + 16 (outlier_idx) + 1 (_align_pad) + 32 (outliers) + 2 (padding) = 162 bytes
+// C with #pragma pack(1): 110 (q3_k_data) + 1 (n_outliers) + 16 (outlier_idx) + 1 (_align_pad) + 32 (residuals) + 2 (padding) = 162 bytes
 // Metal (natural alignment): 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 (padding) + 1 (struct end alignment) = 162 bytes
 // The _align_pad ensures the half array starts at 2-byte aligned offset (128) in Metal
 // Metal adds 1 byte at struct end to align to 2-byte boundary (since struct contains half arrays)

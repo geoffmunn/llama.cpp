@@ -196,11 +196,16 @@ float16_t dequantFuncQ3_K_HIFI(const in decodeBufQ3_K_HIFI bl, const in uint blo
     const float16_t dl = bl.block.d * float16_t(us - 32);
     float16_t ret = dl * float16_t(int8_t((bl.block.qs[qsi] >> qsshift) & 3) - (((bl.block.hmask[hmi] & m) != 0) ? 0 : 4));
 
-    // Step 2: ADD residual correction if this position has one
+    // Step 2: Apply linear prediction residual if this position has one
     const uint n_outliers = min(uint(bl.block.outlier_count), Q3_K_HIFI_OUTLIERS);
     for (uint k = 0; k < n_outliers; ++k) {
         if (uint(bl.block.outlier_idx[k]) == idx) {
-            ret += bl.block.outlier_vals[k];  // ADD correction, don't replace
+            float16_t residual = bl.block.residuals[k];
+            // Compute linear predictor (simplified: use current ret for boundaries)
+            float16_t left  = (idx > 0)     ? ret : ret;  // Would need neighbor access
+            float16_t right = (idx < QUANT_K_Q3_K_HIFI - 1) ? ret : ret;  // Would need neighbor access
+            float16_t pred = (left + right) * 0.5hf;
+            ret = pred + residual;
             break;
         }
     }

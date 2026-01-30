@@ -829,8 +829,8 @@ static __device__ __forceinline__ float vec_dot_q3_k_hifi_q8_1(
             // Each thread processes 4 consecutive int8 values at positions [thread_q8_offset*4, thread_q8_offset*4+4)
             const int pos_in_q8_group = idx_in_bq8 / 4;
             if (pos_in_q8_group == thread_q8_offset) {
-                // outlier_vals contains RESIDUAL correction, not original value
-                const float residual_correction = __half2float(bq3_k_hifi->outlier_vals[k]);
+                // residuals contains linear prediction residual
+                const float residual_correction = __half2float(bq3_k_hifi->residuals[k]);
                 const int8_t q8_val = ((const int8_t*)bq8_1[idx_bq8].qs)[idx_in_bq8];
                 const float d8_val = __low2float(bq8_1[idx_bq8].ds);
                 sum += residual_correction * q8_val * d8_val;

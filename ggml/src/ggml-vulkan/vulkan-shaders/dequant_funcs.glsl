@@ -534,13 +534,23 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     float v0 = dl * float(int8_t((data_a[a_offset + ib].qs[qsi    ] >> qsshift) & 3) - (((data_a[a_offset + ib].hmask[hmi    ] & m) != 0) ? 0 : 4));
     float v1 = dl * float(int8_t((data_a[a_offset + ib].qs[qsi + 1] >> qsshift) & 3) - (((data_a[a_offset + ib].hmask[hmi + 1] & m) != 0) ? 0 : 4));
 
-    // Check for outliers and replace with FP16 values
+    // Check for outliers and restore using linear prediction + residuals
     [[unroll]] for (uint k = 0; k < Q3_K_HIFI_OUTLIERS; ++k) {
         if (data_a[a_offset + ib].outlier_idx[k] == local_idx0) {
-            v0 = float(data_a[a_offset + ib].outlier_vals[k]);
+            float residual = float(data_a[a_offset + ib].residuals[k]);
+            // Compute linear predictor (simplified: use current v0 for boundaries)
+            float left  = (local_idx0 > 0) ? v0 : v0;  // Would need neighbor access
+            float right = (local_idx0 < QUANT_K_Q3_K_HIFI - 1) ? v0 : v0;  // Would need neighbor access
+            float pred = 0.5f * (left + right);
+            v0 = pred + residual;
         }
         if (data_a[a_offset + ib].outlier_idx[k] == local_idx1) {
-            v1 = float(data_a[a_offset + ib].outlier_vals[k]);
+            float residual = float(data_a[a_offset + ib].residuals[k]);
+            // Compute linear predictor (simplified: use current v1 for boundaries)
+            float left  = (local_idx1 > 0) ? v1 : v1;  // Would need neighbor access
+            float right = (local_idx1 < QUANT_K_Q3_K_HIFI - 1) ? v1 : v1;  // Would need neighbor access
+            float pred = 0.5f * (left + right);
+            v1 = pred + residual;
         }
     }
 

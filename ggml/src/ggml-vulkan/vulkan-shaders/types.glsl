@@ -295,7 +295,7 @@ struct block_q3_k_hifi
     uint8_t outlier_count;                 // 1 byte: actual outliers stored
     uint8_t _pad;                          // 1 byte: alignment
     uint8_t outlier_idx[Q3_K_HIFI_OUTLIERS]; // 16 bytes
-    float16_t outlier_vals[Q3_K_HIFI_OUTLIERS]; // 32 bytes
+    float16_t residuals[Q3_K_HIFI_OUTLIERS]; // 32 bytes: linear prediction residuals
 };
 
 struct block_q3_k_hifi_packed16
@@ -307,7 +307,7 @@ struct block_q3_k_hifi_packed16
     uint8_t outlier_count;
     uint8_t _pad;
     uint16_t outlier_idx[Q3_K_HIFI_OUTLIERS/2];
-    float16_t outlier_vals[Q3_K_HIFI_OUTLIERS];
+    float16_t residuals[Q3_K_HIFI_OUTLIERS]; // linear prediction residuals
 };
 
 #if defined(DATA_A_Q3_K_HIFI)
