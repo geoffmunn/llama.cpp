@@ -114,7 +114,7 @@ static void dequantize_row_q3_K_sycl(const void *vx, dst_t *y, const int64_t k,
 #endif
 }
 
-// Q3_K_HIFI: Q3_K-compatible layout with 6 FP16 outliers
+// Q3_K_HIFI: Q3_K-compatible layout with 8 FP16 outliers (optimized from 16)
 template <typename dst_t>
 static void dequantize_row_q3_k_hifi_sycl(const void *vx, dst_t *y, const int64_t k,
                                         dpct::queue_ptr stream) {

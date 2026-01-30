@@ -345,7 +345,7 @@ static void dequantize_block_q3_K(const void * __restrict__ vx, dst_t * __restri
 
 }
 
-// Q3_K_HIFI: Q3_K with 16 FP16 residual corrections
+// Q3_K_HIFI: Q3_K with 8 FP16 residual corrections (optimized from 16)
 template<typename dst_t>
 static void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy,
                                      const sycl::nd_item<3> &item_ct1) {

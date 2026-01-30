@@ -906,8 +906,8 @@ void dequantize_q3_k_hifi(device const block_q3_k_hifi * xb, short il, thread ty
         int pos = base_pos + i;
         if (pos >= Q3_K_HIFI_BLOCK_SIZE) break;
         
-        // Unrolled check: is this position one of the outliers? (respects n_outliers)
-        // This avoids divergent branching and improves GPU performance
+        // Optimized check: only 8 outliers (reduced from 16 for better speed)
+        // Uses unrolled checks to avoid divergent branching and improve GPU performance
         if (n_out > 0  && pos == xb->outlier_idx[0])  { reg[i/4][i%4] = (float)xb->outliers[0];  continue; }
         if (n_out > 1  && pos == xb->outlier_idx[1])  { reg[i/4][i%4] = (float)xb->outliers[1];  continue; }
         if (n_out > 2  && pos == xb->outlier_idx[2])  { reg[i/4][i%4] = (float)xb->outliers[2];  continue; }
@@ -916,14 +916,6 @@ void dequantize_q3_k_hifi(device const block_q3_k_hifi * xb, short il, thread ty
         if (n_out > 5  && pos == xb->outlier_idx[5])  { reg[i/4][i%4] = (float)xb->outliers[5];  continue; }
         if (n_out > 6  && pos == xb->outlier_idx[6])  { reg[i/4][i%4] = (float)xb->outliers[6];  continue; }
         if (n_out > 7  && pos == xb->outlier_idx[7])  { reg[i/4][i%4] = (float)xb->outliers[7];  continue; }
-        if (n_out > 8  && pos == xb->outlier_idx[8])  { reg[i/4][i%4] = (float)xb->outliers[8];  continue; }
-        if (n_out > 9  && pos == xb->outlier_idx[9])  { reg[i/4][i%4] = (float)xb->outliers[9];  continue; }
-        if (n_out > 10 && pos == xb->outlier_idx[10]) { reg[i/4][i%4] = (float)xb->outliers[10]; continue; }
-        if (n_out > 11 && pos == xb->outlier_idx[11]) { reg[i/4][i%4] = (float)xb->outliers[11]; continue; }
-        if (n_out > 12 && pos == xb->outlier_idx[12]) { reg[i/4][i%4] = (float)xb->outliers[12]; continue; }
-        if (n_out > 13 && pos == xb->outlier_idx[13]) { reg[i/4][i%4] = (float)xb->outliers[13]; continue; }
-        if (n_out > 14 && pos == xb->outlier_idx[14]) { reg[i/4][i%4] = (float)xb->outliers[14]; continue; }
-        if (n_out > 15 && pos == xb->outlier_idx[15]) { reg[i/4][i%4] = (float)xb->outliers[15]; continue; }
     }
 }
 

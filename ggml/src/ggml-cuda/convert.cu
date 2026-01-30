@@ -689,7 +689,7 @@ static void dequantize_row_q3_K_cuda(const void * vx, dst_t * y, const int64_t k
     dequantize_block_q3_K<<<nb, 64, 0, stream>>>(vx, y);
 }
 
-// Q3_K_HIFI: Q3_K layout + 16 FP16 residual corrections per block
+// Q3_K_HIFI: Q3_K layout + 8 FP16 residual corrections per block (optimized from 16)
 // Uses Q3_K dequantization for bulk, then ADDS residual corrections
 template<typename dst_t>
 static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
@@ -708,16 +708,19 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
     int64_t is = 8*n + 2*j + is0;
     int shift = 2*j;
 
-    int8_t us = is <  4 ? (x[i].scales[is-0] & 0xF) | (((x[i].scales[is+8] >> 0) & 3) << 4) :
-                is <  8 ? (x[i].scales[is-0] & 0xF) | (((x[i].scales[is+4] >> 2) & 3) << 4) :
-                is < 12 ? (x[i].scales[is-8] >>  4) | (((x[i].scales[is+0] >> 4) & 3) << 4) :
-                          (x[i].scales[is-8] >>  4) | (((x[i].scales[is-4] >> 6) & 3) << 4);
-    float d_all = __half2float(x[i].d);
+    // Access Q3_K data from q3_k_data array (first 110 bytes)
+    const block_q3_K * q3k_block = (const block_q3_K *)x[i].q3_k_data;
+
+    int8_t us = is <  4 ? (q3k_block->scales[is-0] & 0xF) | (((q3k_block->scales[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (q3k_block->scales[is-0] & 0xF) | (((q3k_block->scales[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (q3k_block->scales[is-8] >>  4) | (((q3k_block->scales[is+0] >> 4) & 3) << 4) :
+                          (q3k_block->scales[is-8] >>  4) | (((q3k_block->scales[is-4] >> 6) & 3) << 4);
+    float d_all = __half2float(q3k_block->d);
     float dl = d_all * (us - 32);
 
     dst_t * y = yy + i*QK_K + 128*n + 32*j;
-    const uint8_t * q = x[i].qs + 32*n;
-    const uint8_t * hm = x[i].hmask;
+    const uint8_t * q = q3k_block->qs + 32*n;
+    const uint8_t * hm = q3k_block->hmask;
 
     for (int l = l0; l < l0+4; ++l) {
         y[l] = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
@@ -729,7 +732,7 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
     // Thread 0 handles residual corrections (ADD, not replace)
     if (threadIdx.x == 0) {
         dst_t * yb = yy + i*QK_K;
-        const int n_outliers = (x[i].outlier_count <= Q3_K_HIFI_OUTLIERS) ? x[i].outlier_count : Q3_K_HIFI_OUTLIERS;
+        const int n_outliers = (x[i].n_outliers <= Q3_K_HIFI_OUTLIERS) ? x[i].n_outliers : Q3_K_HIFI_OUTLIERS;
         for (int k = 0; k < n_outliers; ++k) {
             const int idx = x[i].outlier_idx[k];
             yb[idx] += __half2float(x[i].outlier_vals[k]);  // ADD residual correction

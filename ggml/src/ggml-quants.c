@@ -1304,13 +1304,14 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
             quantize_row_q3_K_ref(xb, &q3k_block, Q3_K_HIFI_BLOCK_SIZE);
             memcpy(block->q3_k_data, &q3k_block, 110);
             block->n_outliers = 0;
+            block->_align_pad = 0;  // Initialize alignment padding
             memset(block->outlier_idx, 0, sizeof(block->outlier_idx));
             memset(block->outliers, 0, sizeof(block->outliers));
             memset(block->padding, 0, sizeof(block->padding));
             continue;
         }
 
-        // === DYNAMIC OUTLIER EXTRACTION (test 0-16 outliers, pick best) ===
+        // === DYNAMIC OUTLIER EXTRACTION (test 0-8 outliers, pick best) ===
         // Step 1: Score weights by |weight| (imatrix not available in ref impl)
         float importance[Q3_K_HIFI_BLOCK_SIZE];
         int sorted_indices[Q3_K_HIFI_BLOCK_SIZE];
@@ -1330,16 +1331,16 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
             }
         }
 
-        // Step 2: Test different numbers of outliers (0, 4, 8, 12, 16) and pick best
+        // Step 2: Test different numbers of outliers (0, 2, 4, 6, 8) and pick best
         const float ERROR_THRESHOLD_ABS = 0.1f;
         int best_k = 0;
         float min_max_error = FLT_MAX;
         
-        // Test k = 0, 4, 8, 12, 16 (or up to max_outliers)
-        int test_counts[] = {0, 4, 8, 12, 16};
+        // Test k = 0, 2, 4, 6, 8 (or up to max_outliers)
+        int test_counts[] = {0, 2, 4, 6, 8};
         int num_tests = 5;
-        if (max_outliers < 16) {
-            num_tests = (max_outliers / 4) + 1;
+        if (max_outliers < 8) {
+            num_tests = (max_outliers / 2) + 1;
         }
         
         for (int test_idx = 0; test_idx < num_tests; ++test_idx) {
@@ -1395,6 +1396,7 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
         }
         
         block->n_outliers = (uint8_t)best_k;
+        block->_align_pad = 0;  // Initialize alignment padding (always included for Metal compatibility)
         
         // Step 4: Quantize inliers with standard Q3_K
         block_q3_K q3k_block;
@@ -1451,6 +1453,7 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
             // Copy Q3_K block to q3_k_data, no outliers
             memcpy(block->q3_k_data, &q3k_block, 110);
             block->n_outliers = 0;
+            block->_align_pad = 0;  // Initialize alignment padding
             memset(block->outlier_idx, 0, sizeof(block->outlier_idx));
             memset(block->outliers, 0, sizeof(block->outliers));
             memset(block->padding, 0, sizeof(block->padding));
@@ -1480,16 +1483,16 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
             }
         }
 
-        // Step 2: Test different numbers of outliers (0, 4, 8, 12, 16) and pick best
+        // Step 2: Test different numbers of outliers (0, 2, 4, 6, 8) and pick best
         const float ERROR_THRESHOLD_ABS = 0.1f;
         int best_k = 0;
         float min_max_error = FLT_MAX;
         
-        // Test k = 0, 4, 8, 12, 16 (or up to max_outliers)
-        int test_counts[] = {0, 4, 8, 12, 16};
+        // Test k = 0, 2, 4, 6, 8 (or up to max_outliers)
+        int test_counts[] = {0, 2, 4, 6, 8};
         int num_tests = 5;
-        if (max_outliers < 16) {
-            num_tests = (max_outliers / 4) + 1;
+        if (max_outliers < 8) {
+            num_tests = (max_outliers / 2) + 1;
         }
         
         for (int test_idx = 0; test_idx < num_tests; ++test_idx) {
@@ -1545,6 +1548,7 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
         }
         
         block->n_outliers = (uint8_t)best_k;
+        block->_align_pad = 0;  // Initialize alignment padding (always included for Metal compatibility)
         
         // Step 4: Quantize inliers with standard Q3_K
         block_q3_K q3k_block;

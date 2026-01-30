@@ -4082,7 +4082,8 @@ void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * G
         dequantize_row_q3_K(q3k_block, yb, Q3_K_HIFI_BLOCK_SIZE);
 
         // Step 2: Restore original outlier values (overwrite Q3_K reconstruction at outlier positions)
-        for (int outlier_k = 0; outlier_k < Q3_K_HIFI_OUTLIERS; ++outlier_k) {
+        uint8_t n_out = block->n_outliers;
+        for (int outlier_k = 0; outlier_k < n_out && outlier_k < Q3_K_HIFI_OUTLIERS; ++outlier_k) {
             int idx = block->outlier_idx[outlier_k];
             if (idx < Q3_K_HIFI_BLOCK_SIZE) {
                 yb[idx] = GGML_CPU_FP16_TO_FP32(block->outliers[outlier_k]);

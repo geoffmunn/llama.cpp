@@ -772,7 +772,7 @@ static __device__ __forceinline__ float vec_dot_q3_K_q8_1(
     return vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, bq3_K->scales, scale_offset, d, d8);
 }
 
-// Q3_K_HIFI: Q3_K layout + 16 FP16 residual corrections per block
+// Q3_K_HIFI: Q3_K layout + 8 FP16 residual corrections per block (optimized from 16)
 // Residual-based outlier selection corrects weights Q3_K fails to represent
 // VDR (vector dot reduction) same as Q3_K since layout is compatible
 #define VDR_Q3_K_HIFI_Q8_1_MMVQ VDR_Q3_K_Q8_1_MMVQ
@@ -782,16 +782,19 @@ static __device__ __forceinline__ float vec_dot_q3_k_hifi_q8_1(
 
     const block_q3_k_hifi * bq3_k_hifi = (const block_q3_k_hifi *) vbq + kbx;
 
+    // Access Q3_K data from q3_k_data array (first 110 bytes)
+    const block_q3_K * q3k_block = (const block_q3_K *)bq3_k_hifi->q3_k_data;
+
     // === Q3_K bulk dot product (identical logic) ===
     const int bq8_offset = QR3_K * (iqs / (QI3_K/2));
     const int scale_offset = iqs - iqs % QI8_1 + (iqs % QI8_1) / (QI8_1/2);
 
-    const float d = __half2float(bq3_k_hifi->d);
+    const float d = __half2float(q3k_block->d);
 
-    const int vl = get_int_b2(bq3_k_hifi->qs, iqs);
+    const int vl = get_int_b2(q3k_block->qs, iqs);
 
     // invert the mask with ~ so that a 0/1 results in 4/0 being subtracted
-    const int vh = ~get_int_b2(bq3_k_hifi->hmask, iqs % (QI3_K/2)) >> bq8_offset;
+    const int vh = ~get_int_b2(q3k_block->hmask, iqs % (QI3_K/2)) >> bq8_offset;
 
     int    u[QR3_K];
     float d8[QR3_K];
@@ -803,14 +806,14 @@ static __device__ __forceinline__ float vec_dot_q3_k_hifi_q8_1(
     }
 
     // Compute Q3_K bulk dot product (includes all positions now)
-    float sum = vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, bq3_k_hifi->scales, scale_offset, d, d8);
+    float sum = vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, q3k_block->scales, scale_offset, d, d8);
 
     // === Q3_K_HIFI residual correction ===
     // Each residual correction: residual_val * q8_val * d8
     // These correct the quantization error at positions where Q3_K struggled
     // Outliers are selected by residual magnitude (not original magnitude)
 
-    const int n_outliers = (bq3_k_hifi->outlier_count <= Q3_K_HIFI_OUTLIERS) ? bq3_k_hifi->outlier_count : Q3_K_HIFI_OUTLIERS;
+    const int n_outliers = (bq3_k_hifi->n_outliers <= Q3_K_HIFI_OUTLIERS) ? bq3_k_hifi->n_outliers : Q3_K_HIFI_OUTLIERS;
 
     for (int k = 0; k < n_outliers; ++k) {
         const int idx = bq3_k_hifi->outlier_idx[k];

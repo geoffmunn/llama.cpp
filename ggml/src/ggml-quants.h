@@ -15,7 +15,7 @@
 
 // HIFI variants: outlier counts per block
 // These must match the design of your block structures in ggml.h
-#define Q3_K_HIFI_OUTFIERS_PER_BLOCK     16
+#define Q3_K_HIFI_OUTFIERS_PER_BLOCK     8
 #define Q4_K_HIFI_OUTFIERS_PER_BLOCK     16
 #define Q5_K_HIFI_OUTFIERS_PER_BLOCK      8
 #define Q6_K_HIFI_OUTFIERS_PER_BLOCK      4

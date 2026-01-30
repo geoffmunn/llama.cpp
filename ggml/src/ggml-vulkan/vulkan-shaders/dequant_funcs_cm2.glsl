@@ -167,7 +167,7 @@ float16_t dequantFuncQ3_K(const in decodeBufQ3_K bl, const in uint blockCoords[2
     return ret;
 }
 
-// Q3_K_HIFI: Q3_K with 16 FP16 residual corrections
+// Q3_K_HIFI: Q3_K with 8 FP16 residual corrections (optimized from 16)
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ3_K_HIFI {
    block_q3_k_hifi block;
 };

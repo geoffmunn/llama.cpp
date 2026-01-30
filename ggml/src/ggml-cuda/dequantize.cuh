@@ -76,16 +76,17 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
     v.y *= d;
 }
 
-// Q3_K_HIFI: Q3_K layout + 16 FP16 residual corrections
-// Uses same hmask/qs/scales layout as Q3_K for the first 110 bytes
+// Q3_K_HIFI: Q3_K layout + 8 FP16 residual corrections (optimized from 16)
+// Uses q3_k_data[110] containing Q3_K block, then outlier corrections
 // Residuals ADD to the Q3_K value (don't replace)
 static __device__ __forceinline__ void dequantize_q3_k_hifi(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_q3_k_hifi * x = (const block_q3_k_hifi *) vx;
 
-    // Use Q3_K-style extraction
-    const float d = __half2float(x[ib].d);
-    const uint8_t * qs = x[ib].qs;
-    const uint8_t * hmask = x[ib].hmask;
+    // Access Q3_K data from q3_k_data array (first 110 bytes)
+    const block_q3_K * q3k_block = (const block_q3_K *)x[ib].q3_k_data;
+    const float d = __half2float(q3k_block->d);
+    const uint8_t * qs = q3k_block->qs;
+    const uint8_t * hmask = q3k_block->hmask;
 
     // iqs is in range [0, QK_K/2) = [0, 128)
     // We need to extract 2 values at positions iqs*2 and iqs*2+1
@@ -119,7 +120,7 @@ static __device__ __forceinline__ void dequantize_q3_k_hifi(const void * vx, con
 
     // ADD residual corrections (not replace!)
     // outlier_vals contains the residual error that Q3_K failed to represent
-    const int n_outliers = (x[ib].outlier_count <= Q3_K_HIFI_OUTLIERS) ? x[ib].outlier_count : Q3_K_HIFI_OUTLIERS;
+    const int n_outliers = (x[ib].n_outliers <= Q3_K_HIFI_OUTLIERS) ? x[ib].n_outliers : Q3_K_HIFI_OUTLIERS;
     for (int k = 0; k < n_outliers; ++k) {
         if (x[ib].outlier_idx[k] == idx0) {
             v.x += __half2float(x[ib].outlier_vals[k]);  // ADD correction
