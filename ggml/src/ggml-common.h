@@ -294,7 +294,6 @@ static_assert(sizeof(block_q3_K) == sizeof(ggml_half) + QK_K / 4 + QK_K / 8 + 12
 #define Q3_K_HIFI_BLOCK_SIZE 256
 #define Q3_K_HIFI_OUTLIERS   16
 #define Q3_K_HIFI_INLIERS    (Q3_K_HIFI_BLOCK_SIZE - Q3_K_HIFI_OUTLIERS)  // 240
-#if !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #if !defined(GGML_COMMON_DECL_METAL)
 #pragma pack(push, 1)
 #endif
@@ -335,8 +334,9 @@ typedef struct {
 // Metal (natural alignment): 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 (padding) + 1 (struct end alignment) = 162 bytes
 // The _align_pad ensures the half array starts at 2-byte aligned offset (128) in Metal
 // Metal adds 1 byte at struct end to align to 2-byte boundary (since struct contains half arrays)
+#if !defined(GGML_COMMON_DECL_METAL)
 static_assert(sizeof(block_q3_k_hifi) == 162, "wrong q3_k_hifi block size/padding (must be 162 bytes)");
-#endif  // !CUDA && !HIP
+#endif  // !METAL
 
 // Q3_K_HIFI_RES8: Lean version with INT8 residuals for use WITH imatrix
 // When imatrix is present, base quantization is already optimized - INT8 residuals suffice
