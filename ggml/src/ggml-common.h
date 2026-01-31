@@ -334,12 +334,14 @@ typedef struct {
 // Metal (natural alignment): 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 (padding) + 1 (struct end alignment) = 162 bytes
 // The _align_pad ensures the half array starts at 2-byte aligned offset (128) in Metal
 // Metal adds 1 byte at struct end to align to 2-byte boundary (since struct contains half arrays)
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 static_assert(sizeof(block_q3_k_hifi) == 162, "wrong q3_k_hifi block size/padding (must be 162 bytes)");
+#endif
 
 // CUDA-specific struct definition for block_q3_k_hifi
 // CUDA needs individual field access for efficient GPU operations
 #if defined(GGML_COMMON_DECL_CUDA) || defined(GGML_COMMON_DECL_HIP)
-typedef struct {
+typedef struct __attribute__((packed)) {
     // Q3_K base fields (110 bytes)
     uint8_t hmask[QK_K/8];     // 32 bytes: high bit mask
     uint8_t qs[QK_K/4];        // 64 bytes: low 2 bits

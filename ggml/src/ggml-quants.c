@@ -1587,7 +1587,7 @@ void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * G
             uint8_t idx = block->outlier_idx[outlier_k];
             // idx is uint8_t (0-255), Q3_K_HIFI_BLOCK_SIZE is 256, so idx is always < 256
             // But we keep the check for safety and clarity
-            if ((int)idx < Q3_K_HIFI_BLOCK_SIZE) {
+            if (idx < Q3_K_HIFI_BLOCK_SIZE) {
                 ggml_fp16_t outlier_fp16 = block->outliers[outlier_k];
                 float outlier_val = GGML_FP16_TO_FP32(outlier_fp16);
                 yb[idx] = outlier_val;  // Restore original value (overwrites Q3_K reconstruction)
