@@ -690,7 +690,7 @@ static void dequantize_row_q3_K_cuda(const void * vx, dst_t * y, const int64_t k
 }
 
 // Q3_K_HIFI: Q3_K layout + 16 FP16 residual corrections per block
-// Uses Q3_K dequantization for bulk, then ADDS residual corrections
+// Uses Q3_K dequantization for bulk, then REPLACES outlier positions with original values
 template<typename dst_t>
 static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
     const int64_t i = blockIdx.x;
@@ -723,16 +723,16 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
         y[l] = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
     }
 
-    // Synchronize before adding residual corrections
+    // Synchronize before replacing outlier positions
     __syncthreads();
 
-    // Thread 0 handles residual corrections (ADD, not replace)
+    // Thread 0 handles outlier replacement (REPLACE, not add)
     if (threadIdx.x == 0) {
         dst_t * yb = yy + i*QK_K;
-        const int n_outliers = (x[i].outlier_count <= Q3_K_HIFI_OUTLIERS) ? x[i].outlier_count : Q3_K_HIFI_OUTLIERS;
+        const int n_outliers = (x[i].n_outliers <= Q3_K_HIFI_OUTLIERS) ? x[i].n_outliers : Q3_K_HIFI_OUTLIERS;
         for (int k = 0; k < n_outliers; ++k) {
             const int idx = x[i].outlier_idx[k];
-            yb[idx] += __half2float(x[i].outlier_vals[k]);  // ADD residual correction
+            yb[idx] = __half2float(x[i].outliers[k]);  // REPLACE with original value
         }
     }
 }

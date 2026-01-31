@@ -118,14 +118,14 @@ static __device__ __forceinline__ void dequantize_q3_k_hifi(const void * vx, con
     v.y = quant_val1 * d;
 
     // ADD residual corrections (not replace!)
-    // outlier_vals contains the residual error that Q3_K failed to represent
-    const int n_outliers = (x[ib].outlier_count <= Q3_K_HIFI_OUTLIERS) ? x[ib].outlier_count : Q3_K_HIFI_OUTLIERS;
+    // outliers contains the residual error that Q3_K failed to represent
+    const int n_outliers = (x[ib].n_outliers <= Q3_K_HIFI_OUTLIERS) ? x[ib].n_outliers : Q3_K_HIFI_OUTLIERS;
     for (int k = 0; k < n_outliers; ++k) {
         if (x[ib].outlier_idx[k] == idx0) {
-            v.x += __half2float(x[ib].outlier_vals[k]);  // ADD correction
+            v.x += __half2float(x[ib].outliers[k]);  // ADD correction
         }
         if (x[ib].outlier_idx[k] == idx1) {
-            v.y += __half2float(x[ib].outlier_vals[k]);  // ADD correction
+            v.y += __half2float(x[ib].outliers[k]);  // ADD correction
         }
     }
 }

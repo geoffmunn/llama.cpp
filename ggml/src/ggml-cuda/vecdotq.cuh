@@ -810,7 +810,7 @@ static __device__ __forceinline__ float vec_dot_q3_k_hifi_q8_1(
     // These correct the quantization error at positions where Q3_K struggled
     // Outliers are selected by residual magnitude (not original magnitude)
 
-    const int n_outliers = (bq3_k_hifi->outlier_count <= Q3_K_HIFI_OUTLIERS) ? bq3_k_hifi->outlier_count : Q3_K_HIFI_OUTLIERS;
+    const int n_outliers = (bq3_k_hifi->n_outliers <= Q3_K_HIFI_OUTLIERS) ? bq3_k_hifi->n_outliers : Q3_K_HIFI_OUTLIERS;
 
     for (int k = 0; k < n_outliers; ++k) {
         const int idx = bq3_k_hifi->outlier_idx[k];
@@ -829,8 +829,8 @@ static __device__ __forceinline__ float vec_dot_q3_k_hifi_q8_1(
             // Each thread processes 4 consecutive int8 values at positions [thread_q8_offset*4, thread_q8_offset*4+4)
             const int pos_in_q8_group = idx_in_bq8 / 4;
             if (pos_in_q8_group == thread_q8_offset) {
-                // outlier_vals contains RESIDUAL correction, not original value
-                const float residual_correction = __half2float(bq3_k_hifi->outlier_vals[k]);
+                // outliers contains RESIDUAL correction, not original value
+                const float residual_correction = __half2float(bq3_k_hifi->outliers[k]);
                 const int8_t q8_val = ((const int8_t*)bq8_1[idx_bq8].qs)[idx_in_bq8];
                 const float d8_val = __low2float(bq8_1[idx_bq8].ds);
                 sum += residual_correction * q8_val * d8_val;
