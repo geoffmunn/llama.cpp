@@ -336,6 +336,24 @@ typedef struct {
 // Metal adds 1 byte at struct end to align to 2-byte boundary (since struct contains half arrays)
 static_assert(sizeof(block_q3_k_hifi) == 162, "wrong q3_k_hifi block size/padding (must be 162 bytes)");
 
+// CUDA-specific struct definition for block_q3_k_hifi
+// CUDA needs individual field access for efficient GPU operations
+#if defined(GGML_COMMON_DECL_CUDA) || defined(GGML_COMMON_DECL_HIP)
+typedef struct {
+    // Q3_K base fields (110 bytes)
+    uint8_t hmask[QK_K/8];     // 32 bytes: high bit mask
+    uint8_t qs[QK_K/4];        // 64 bytes: low 2 bits
+    uint8_t scales[12];        // 12 bytes: 16 sub-group scales (6-bit each)
+    ggml_half d;               // 2 bytes: super-block scale
+    // Outlier extension (52 bytes)
+    uint8_t n_outliers;                    // 1 byte: number of outliers (0-16)
+    uint8_t outlier_idx[Q3_K_HIFI_OUTLIERS]; // 16 bytes: indices of outliers
+    ggml_half outliers[Q3_K_HIFI_OUTLIERS]; // 32 bytes: original outlier values as FP16
+    uint8_t padding[3];                   // 3 bytes: padding to match 162 byte total
+} block_q3_k_hifi;
+static_assert(sizeof(block_q3_k_hifi) == 162, "wrong q3_k_hifi CUDA block size/padding (must be 162 bytes)");
+#endif
+
 // Q3_K_HIFI_RES8: Lean version with INT8 residuals for use WITH imatrix
 // When imatrix is present, base quantization is already optimized - INT8 residuals suffice
 // Uses 8 outliers (vs 16 in FP16 version) for minimal overhead while maintaining quality
