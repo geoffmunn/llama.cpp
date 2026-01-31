@@ -290,36 +290,38 @@ static_assert(sizeof(block_q3_K) == sizeof(ggml_half) + QK_K / 4 + QK_K / 8 + 12
 
 // Q3_K_HIFI: Imatrix-Guided Sparse 3-bit quantization (IGS-3)
 // Preserves top-16 most important weights as FP16, quantizes remaining 240 to 3-bit
-// This avoids scale distortion and preserves critical signal exactly
+// Q3_K structure (110 bytes) + HIFI extension (52 bytes) = 162 bytes total
 #define Q3_K_HIFI_BLOCK_SIZE 256
 #define Q3_K_HIFI_OUTLIERS   16
 #define Q3_K_HIFI_INLIERS    (Q3_K_HIFI_BLOCK_SIZE - Q3_K_HIFI_OUTLIERS)  // 240
+
 #if !defined(GGML_COMMON_DECL_METAL)
 #pragma pack(push, 1)
 #endif
 typedef struct {
-    // === DYNAMIC OUTLIER EXTRACTION LAYOUT ===
-    // First 110 bytes: standard Q3_K block (for inliers with outliers zeroed)
-    uint8_t q3_k_data[110];
+    // === Q3_K STANDARD LAYOUT (110 bytes) - MUST MATCH block_q3_K exactly ===
+    uint8_t hmask[QK_K/8];   // quants - high bit (32 bytes)
+    uint8_t qs[QK_K/4];      // quants - low 2 bits (64 bytes)
+    uint8_t scales[12];      // scales, quantized with 6 bits (12 bytes)
+    ggml_half d;             // super-block scale (2 bytes)
     
-    // Next 1 byte: number of outliers (0-16)
+    // === HIFI EXTENSION (52 bytes) ===
+    // 1 byte: number of outliers (0-16)
     uint8_t n_outliers;
     
-    // Next 16 bytes: indices of outliers (only first n_outliers are valid)
+    // 16 bytes: indices of outliers (only first n_outliers are valid)
     uint8_t outlier_idx[Q3_K_HIFI_OUTLIERS];
     
-    // Alignment padding: ensures half array is 2-byte aligned in Metal
+    // Alignment padding: ensures half array is 2-byte aligned
     // In C with #pragma pack(1), this is just a byte (no alignment effect)
-    // In Metal, this ensures outliers array starts at offset 128 (2-byte aligned)
+    // In Metal, this ensures outliers array starts at 2-byte aligned offset
     uint8_t _align_pad;
     
-    // Next 32 bytes: original outlier values as FP16 (only first n_outliers are valid)
+    // 32 bytes: original outlier values as FP16 (only first n_outliers are valid)
     ggml_half outliers[Q3_K_HIFI_OUTLIERS];
     
     // Final padding to make total size exactly 162 bytes
-    // C with #pragma pack(1): 110 + 1 + 16 + 1 (_align_pad) + 32 + 2 = 162
-    // Metal (natural alignment): 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 (padding) + 1 (struct alignment) = 162
-    // Metal adds 1 byte at the end to align struct to 2-byte boundary (since it contains half arrays)
+    // Calculation: 110 (Q3_K) + 1 (n_outliers) + 16 (outlier_idx) + 1 (_align_pad) + 32 (outliers) + 2 (padding) = 162
 #if defined(GGML_COMMON_DECL_METAL)
     uint8_t padding[1];
 #else
@@ -329,11 +331,6 @@ typedef struct {
 #if !defined(GGML_COMMON_DECL_METAL)
 #pragma pack(pop)
 #endif
-// Size calculation:
-// C with #pragma pack(1): 110 (q3_k_data) + 1 (n_outliers) + 16 (outlier_idx) + 1 (_align_pad) + 32 (outliers) + 2 (padding) = 162 bytes
-// Metal (natural alignment): 110 + 1 + 16 + 1 (_align_pad) + 32 + 1 (padding) + 1 (struct end alignment) = 162 bytes
-// The _align_pad ensures the half array starts at 2-byte aligned offset (128) in Metal
-// Metal adds 1 byte at struct end to align to 2-byte boundary (since struct contains half arrays)
 #if !defined(GGML_COMMON_DECL_METAL)
 static_assert(sizeof(block_q3_k_hifi) == 162, "wrong q3_k_hifi block size/padding (must be 162 bytes)");
 #endif  // !METAL
