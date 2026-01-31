@@ -982,47 +982,47 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             }
             return dequantize_block_cont_cuda<QK8_0, QR8_0, dequantize_q8_0>;
         case GGML_TYPE_Q2_K:
-            return dequantize_row_q2_K_cuda;
+            return dequantize_row_q2_K_cuda<float>;
         case GGML_TYPE_Q3_K:
-            return dequantize_row_q3_K_cuda;
+            return dequantize_row_q3_K_cuda<float>;
         case GGML_TYPE_Q3_K_HIFI:
-            return dequantize_row_q3_k_hifi_cuda;
+            return dequantize_row_q3_k_hifi_cuda<float>;
         case GGML_TYPE_Q3_K_HIFI_RES8:
-            return dequantize_row_q3_k_hifi_res8_cuda;
+            return dequantize_row_q3_k_hifi_res8_cuda<float>;
         case GGML_TYPE_Q6_K_HIFI:
-            return dequantize_row_q6_k_hifi_cuda;
+            return dequantize_row_q6_k_hifi_cuda<float>;
         case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
-            return dequantize_row_q6_k_hifi_dynamic_cuda;
+            return dequantize_row_q6_k_hifi_dynamic_cuda<float>;
         case GGML_TYPE_Q6_K_HIFI_RES8:
-            return dequantize_row_q6_k_hifi_res8_cuda;
+            return dequantize_row_q6_k_hifi_res8_cuda<float>;
         case GGML_TYPE_Q5_K_HIFI_RES8:
-            return dequantize_row_q5_k_hifi_res8_cuda;
+            return dequantize_row_q5_k_hifi_res8_cuda<float>;
         case GGML_TYPE_Q4_K:
-            return dequantize_row_q4_K_cuda;
+            return dequantize_row_q4_K_cuda<float>;
         case GGML_TYPE_Q5_K:
-            return dequantize_row_q5_K_cuda;
+            return dequantize_row_q5_K_cuda<float>;
         case GGML_TYPE_Q6_K:
-            return dequantize_row_q6_K_cuda;
+            return dequantize_row_q6_K_cuda<float>;
         case GGML_TYPE_IQ2_XXS:
-            return dequantize_row_iq2_xxs_cuda;
+            return dequantize_row_iq2_xxs_cuda<float>;
         case GGML_TYPE_IQ2_XS:
-            return dequantize_row_iq2_xs_cuda;
+            return dequantize_row_iq2_xs_cuda<float>;
         case GGML_TYPE_IQ2_S:
-            return dequantize_row_iq2_s_cuda;
+            return dequantize_row_iq2_s_cuda<float>;
         case GGML_TYPE_IQ3_XXS:
-            return dequantize_row_iq3_xxs_cuda;
+            return dequantize_row_iq3_xxs_cuda<float>;
         case GGML_TYPE_IQ1_S:
-            return dequantize_row_iq1_s_cuda;
+            return dequantize_row_iq1_s_cuda<float>;
         case GGML_TYPE_IQ1_M:
-            return dequantize_row_iq1_m_cuda;
+            return dequantize_row_iq1_m_cuda<float>;
         case GGML_TYPE_IQ4_NL:
-            return dequantize_row_iq4_nl_cuda;
+            return dequantize_row_iq4_nl_cuda<float>;
         case GGML_TYPE_IQ4_XS:
-            return dequantize_row_iq4_xs_cuda;
+            return dequantize_row_iq4_xs_cuda<float>;
         case GGML_TYPE_IQ3_S:
-            return dequantize_row_iq3_s_cuda;
+            return dequantize_row_iq3_s_cuda<float>;
         case GGML_TYPE_MXFP4:
-            return dequantize_row_mxfp4_cuda;
+            return dequantize_row_mxfp4_cuda<float>;
         case GGML_TYPE_F32:
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_BF16:
@@ -1045,13 +1045,13 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
         case GGML_TYPE_Q8_0:
             return dequantize_block_cont_cuda<QK8_0, QR8_0, dequantize_q8_0>;
         case GGML_TYPE_Q2_K:
-            return dequantize_row_q2_K_cuda;
+            return dequantize_row_q2_K_cuda<float>;
         case GGML_TYPE_Q3_K:
-            return dequantize_row_q3_K_cuda;
+            return dequantize_row_q3_K_cuda<float>;
         case GGML_TYPE_Q3_K_HIFI:
-            return dequantize_row_q3_k_hifi_cuda;
+            return dequantize_row_q3_k_hifi_cuda<float>;
         case GGML_TYPE_Q3_K_HIFI_RES8:
-            return dequantize_row_q3_k_hifi_res8_cuda;
+            return dequantize_row_q3_k_hifi_res8_cuda<float>;
         case GGML_TYPE_Q6_K_HIFI:
             return dequantize_row_q6_k_hifi_cuda;
         case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
@@ -1157,3 +1157,9 @@ to_fp32_nc_cuda_t ggml_get_to_fp32_nc_cuda(ggml_type type) {
             return nullptr;
     }
 }
+
+// Explicit template instantiations for Q3_K_HIFI to ensure functions are available
+template void dequantize_row_q3_k_hifi_cuda<float>(const void *, float *, const int64_t, cudaStream_t);
+template void dequantize_row_q3_k_hifi_cuda<half>(const void *, half *, const int64_t, cudaStream_t);
+template void dequantize_row_q3_k_hifi_res8_cuda<float>(const void *, float *, const int64_t, cudaStream_t);
+template void dequantize_row_q3_k_hifi_res8_cuda<half>(const void *, half *, const int64_t, cudaStream_t);
