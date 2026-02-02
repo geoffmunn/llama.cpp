@@ -805,10 +805,55 @@ static __device__ __forceinline__ float vec_dot_q3_k_hifi_q8_1(
     // Compute Q3_K bulk dot product (includes all positions now)
     float sum = vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, bq3_k_hifi->scales, scale_offset, d, d8);
 
-    // === Q3_K_HIFI residual correction ===
-    // Each residual correction: residual_val * q8_val * d8
-    // These correct the quantization error at positions where Q3_K struggled
-    // Outliers are selected by residual magnitude (not original magnitude)
+    // === Q3_K_HIFI outlier restoration ===
+    // Q3_K_HIFI stores ORIGINAL values for outlier positions.
+    // The Q3_K bulk dot product includes these positions quantized to Q3_K precision,
+    // so we need to subtract that contribution and add the contribution from the original value.
+    // 
+    // For each outlier at index idx with original value V_orig:
+    //   - Q3_K bulk includes: Q3_K_reconstructed_at_idx * q8_val * d8
+    //   - We replace with: V_orig * q8_val * d8
+    //   - Net correction: (V_orig - Q3_K_reconstructed_at_idx) * q8_val * d8
+    //
+    // However, we can't easily reconstruct Q3_K_reconstructed_at_idx here (it's expensive).
+    // Instead, we leverage that Q3_K_HIFI dequant uses exact original values for outliers,
+    // which means for dot product we should directly contribute the outlier's value.
+    //
+    // The correct approach: replace outlier contributions by extracting and recomputing.
+    // But CUDA architecture makes this difficult without thread cooperation.
+    // 
+    // For now, use approximation: treat as residual where outlier value is already accounted in Q3_K
+    // and we store the correction needed. Actually, store original values and subtract Q3K estimate.
+    //
+    // CORRECTED: We receive ORIGINAL value in outliers[]. We need to:
+    // 1. Compute what Q3_K reconstructed at that position (need d, scales, qs, hmask)
+    // 2. Subtract Q3_K reconstruction contribution
+    // 3. Add original value contribution
+    //
+    // Simplified: For vec_dot, treat outliers as storing the original VALUE not residual.
+    // The contribution should be: original_value * q8_val * d8, NOT as a residual.
+    //
+    // Since Q3_K bulk dot was computed including quantized outlier estimates,
+    // and outliers array has original values, we need:
+    // residual_actual = original - q3k_reconstructed
+    // But we can't efficiently compute q3k_reconstructed per element here.
+    //
+    // CORRECT FIX: The outliers[] stores ORIGINAL values. For dot product:
+    // - Compute contribution using: original_value * q8_val * d8
+    // - This is what we should add (replacing the Q3K quantized contribution that was already in the bulk sum)
+    // - But the bulk sum already included a lower-precision Q3K contribution at that index.
+    //
+    // The Q3_K algorithm quantizes ALL 256 weights. At outlier positions it uses 3-bit quantization.
+    // The HIFI version overrides those 3-bit values with 16-bit originals.
+    // For dot product, we need to know: what did Q3_K give at position idx?
+    //
+    // SOLUTION: Store RESIDUAL in outliers, not original. Then dequant needs to add residual to Q3K.
+    // But current code stores original. So we need to fix vec_dot to handle original values.
+    //
+    // HACK: Since outlier positions are set to 0 in the inliers quantization (see C code line 1551),
+    // the Q3_K reconstruction at outlier positions is 0! So:
+    // residual = original - 0 = original
+    // Therefore: sum += original_value * q8_val * d8 is CORRECT!
 
     const int n_outliers = (bq3_k_hifi->n_outliers <= Q3_K_HIFI_OUTLIERS) ? bq3_k_hifi->n_outliers : Q3_K_HIFI_OUTLIERS;
 
@@ -829,11 +874,13 @@ static __device__ __forceinline__ float vec_dot_q3_k_hifi_q8_1(
             // Each thread processes 4 consecutive int8 values at positions [thread_q8_offset*4, thread_q8_offset*4+4)
             const int pos_in_q8_group = idx_in_bq8 / 4;
             if (pos_in_q8_group == thread_q8_offset) {
-                // outliers contains RESIDUAL correction, not original value
-                const float residual_correction = __half2float(bq3_k_hifi->outliers[k]);
+                // outliers[] contains ORIGINAL value for this weight
+                // Q3K quantized this position to 0 (since inliers_only set outlier indices to 0)
+                // So the contribution is simply: original_value * q8_val * d8
+                const float original_value = __half2float(bq3_k_hifi->outliers[k]);
                 const int8_t q8_val = ((const int8_t*)bq8_1[idx_bq8].qs)[idx_in_bq8];
                 const float d8_val = __low2float(bq8_1[idx_bq8].ds);
-                sum += residual_correction * q8_val * d8_val;
+                sum += original_value * q8_val * d8_val;
             }
         }
     }
