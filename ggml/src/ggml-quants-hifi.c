@@ -265,12 +265,12 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
     
     switch (cat) {
         case Q3_HIFI_SIZE_TINY:
-            // ≤1.7B: 0-2 outliers
-            // 0.6B especially struggles with BPW overhead
+            // ≤1.7B: Experimental outlier counts for small models
+            // Testing if HIFI can improve quality without excessive BPW overhead
             if (model_params_b <= 0.8f) {
-                return 0;  // Skip HIFI entirely for 0.6B
+                return 4;  // 0.6B: Enable HIFI for testing (moderate outliers)
             }
-            return 2;  // Minimal for 1.7B
+            return 4;  // 1.7B: Increase from 2 to 4 for better evaluation
             
         case Q3_HIFI_SIZE_MEDIUM:
             // 2B-8B: Full enhancement
