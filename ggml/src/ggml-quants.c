@@ -1289,6 +1289,31 @@ static int64_t g_q3k_hifi_total_outliers = 0;
 static float g_q3k_hifi_max_outlier_magnitude = 0.0f;
 static float g_q3k_hifi_min_outlier_magnitude = FLT_MAX;
 
+// === DIAGNOSTIC STATISTICS FOR THRESHOLD ANALYSIS ===
+// Track outliers below various magnitude thresholds
+static int64_t g_q3k_hifi_outliers_below_001 = 0;   // magnitude < 0.01
+static int64_t g_q3k_hifi_outliers_below_002 = 0;   // magnitude < 0.02
+static int64_t g_q3k_hifi_outliers_below_005 = 0;   // magnitude < 0.05
+static int64_t g_q3k_hifi_outliers_below_010 = 0;   // magnitude < 0.10
+
+// Track outlier magnitude relative to block scale
+static double g_q3k_hifi_sum_outlier_to_scale_ratio = 0.0;
+static double g_q3k_hifi_sum_outlier_to_scale_ratio_sq = 0.0;
+static float g_q3k_hifi_max_outlier_to_scale_ratio = 0.0f;
+static float g_q3k_hifi_min_outlier_to_scale_ratio = FLT_MAX;
+
+// Track how many outliers would survive each threshold (per-block histogram)
+// Index = number of outliers that would remain, count = number of blocks
+static int64_t g_q3k_hifi_threshold_001_histogram[Q3_K_HIFI_OUTLIERS + 1] = {0};
+static int64_t g_q3k_hifi_threshold_002_histogram[Q3_K_HIFI_OUTLIERS + 1] = {0};
+static int64_t g_q3k_hifi_threshold_005_histogram[Q3_K_HIFI_OUTLIERS + 1] = {0};
+static int64_t g_q3k_hifi_threshold_010_histogram[Q3_K_HIFI_OUTLIERS + 1] = {0};
+
+// Track block scale (d) statistics for context
+static double g_q3k_hifi_sum_block_scale = 0.0;
+static float g_q3k_hifi_max_block_scale = 0.0f;
+static float g_q3k_hifi_min_block_scale = FLT_MAX;
+
 void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi * GGML_RESTRICT y, int64_t k) {
     assert(k % Q3_K_HIFI_BLOCK_SIZE == 0);
     const int64_t nb = k / Q3_K_HIFI_BLOCK_SIZE;
@@ -1357,7 +1382,14 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
             outlier_indices[j + 1] = key_idx;
         }
 
-        // Step 4: Store sorted outlier values
+        // Step 4: Store sorted outlier values and collect basic statistics
+        // Also track per-block threshold survival counts for diagnostics
+        int block_outliers_above_001 = 0;
+        int block_outliers_above_002 = 0;
+        int block_outliers_above_005 = 0;
+        int block_outliers_above_010 = 0;
+        float block_outlier_mags[Q3_K_HIFI_OUTLIERS] = {0};  // Store for later ratio calculation
+
         for (int outlier_k = 0; outlier_k < max_outliers; ++outlier_k) {
             const int idx = outlier_indices[outlier_k];
             block->outlier_idx[outlier_k] = (uint8_t)idx;
@@ -1365,12 +1397,25 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
 
             // Collect statistics
             float outlier_mag = fabsf(xb[idx]);
+            block_outlier_mags[outlier_k] = outlier_mag;
             g_q3k_hifi_sum_outlier_magnitude += (double)outlier_mag;
             g_q3k_hifi_sum_outlier_magnitude_sq += (double)(outlier_mag * outlier_mag);
             if (outlier_mag > g_q3k_hifi_max_outlier_magnitude) g_q3k_hifi_max_outlier_magnitude = outlier_mag;
             if (outlier_mag < g_q3k_hifi_min_outlier_magnitude) g_q3k_hifi_min_outlier_magnitude = outlier_mag;
             g_q3k_hifi_outlier_position_histogram[idx]++;
             g_q3k_hifi_total_outliers++;
+
+            // Diagnostic: count outliers below various thresholds
+            if (outlier_mag < 0.01f) g_q3k_hifi_outliers_below_001++;
+            if (outlier_mag < 0.02f) g_q3k_hifi_outliers_below_002++;
+            if (outlier_mag < 0.05f) g_q3k_hifi_outliers_below_005++;
+            if (outlier_mag < 0.10f) g_q3k_hifi_outliers_below_010++;
+
+            // Track how many would survive each threshold
+            if (outlier_mag >= 0.01f) block_outliers_above_001++;
+            if (outlier_mag >= 0.02f) block_outliers_above_002++;
+            if (outlier_mag >= 0.05f) block_outliers_above_005++;
+            if (outlier_mag >= 0.10f) block_outliers_above_010++;
         }
         // Zero out unused outlier slots (use 255 as sentinel for early exit in kernels)
         for (int outlier_k = max_outliers; outlier_k < Q3_K_HIFI_OUTLIERS; ++outlier_k) {
@@ -1381,6 +1426,12 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
         // Track outlier count per block
         g_q3k_hifi_outlier_count_histogram[max_outliers]++;
         g_q3k_hifi_total_blocks_quantized++;
+
+        // Track threshold survival histograms
+        g_q3k_hifi_threshold_001_histogram[block_outliers_above_001]++;
+        g_q3k_hifi_threshold_002_histogram[block_outliers_above_002]++;
+        g_q3k_hifi_threshold_005_histogram[block_outliers_above_005]++;
+        g_q3k_hifi_threshold_010_histogram[block_outliers_above_010]++;
 
         // Step 5: Zero out outliers and quantize inliers with standard Q3_K
         float inliers_only[Q3_K_HIFI_BLOCK_SIZE];
@@ -1393,6 +1444,22 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
         quantize_row_q3_K_ref(inliers_only, &q3k_block, Q3_K_HIFI_BLOCK_SIZE);
         memcpy(block->q3_k_data, &q3k_block, 110);
         memset(block->padding, 0, sizeof(block->padding));
+
+        // Diagnostic: Track outlier magnitude relative to block scale
+        float block_scale = GGML_FP16_TO_FP32(q3k_block.d);
+        if (block_scale > 0.0f) {
+            g_q3k_hifi_sum_block_scale += (double)block_scale;
+            if (block_scale > g_q3k_hifi_max_block_scale) g_q3k_hifi_max_block_scale = block_scale;
+            if (block_scale < g_q3k_hifi_min_block_scale) g_q3k_hifi_min_block_scale = block_scale;
+
+            for (int outlier_k = 0; outlier_k < max_outliers; ++outlier_k) {
+                float ratio = block_outlier_mags[outlier_k] / block_scale;
+                g_q3k_hifi_sum_outlier_to_scale_ratio += (double)ratio;
+                g_q3k_hifi_sum_outlier_to_scale_ratio_sq += (double)(ratio * ratio);
+                if (ratio > g_q3k_hifi_max_outlier_to_scale_ratio) g_q3k_hifi_max_outlier_to_scale_ratio = ratio;
+                if (ratio < g_q3k_hifi_min_outlier_to_scale_ratio) g_q3k_hifi_min_outlier_to_scale_ratio = ratio;
+            }
+        }
 
         // Debug logging
         static bool quant_debug_enabled = false;
@@ -1492,7 +1559,14 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
             outlier_indices[j + 1] = key_idx;
         }
 
-        // Step 4: Store sorted outlier values
+        // Step 4: Store sorted outlier values and collect basic statistics
+        // Also track per-block threshold survival counts for diagnostics
+        int block_outliers_above_001 = 0;
+        int block_outliers_above_002 = 0;
+        int block_outliers_above_005 = 0;
+        int block_outliers_above_010 = 0;
+        float block_outlier_mags[Q3_K_HIFI_OUTLIERS] = {0};  // Store for later ratio calculation
+
         for (int outlier_k = 0; outlier_k < max_outliers; ++outlier_k) {
             const int idx = outlier_indices[outlier_k];
             block->outlier_idx[outlier_k] = (uint8_t)idx;
@@ -1500,12 +1574,25 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
 
             // Collect statistics
             float outlier_mag = fabsf(xb[idx]);
+            block_outlier_mags[outlier_k] = outlier_mag;
             g_q3k_hifi_sum_outlier_magnitude += (double)outlier_mag;
             g_q3k_hifi_sum_outlier_magnitude_sq += (double)(outlier_mag * outlier_mag);
             if (outlier_mag > g_q3k_hifi_max_outlier_magnitude) g_q3k_hifi_max_outlier_magnitude = outlier_mag;
             if (outlier_mag < g_q3k_hifi_min_outlier_magnitude) g_q3k_hifi_min_outlier_magnitude = outlier_mag;
             g_q3k_hifi_outlier_position_histogram[idx]++;
             g_q3k_hifi_total_outliers++;
+
+            // Diagnostic: count outliers below various thresholds
+            if (outlier_mag < 0.01f) g_q3k_hifi_outliers_below_001++;
+            if (outlier_mag < 0.02f) g_q3k_hifi_outliers_below_002++;
+            if (outlier_mag < 0.05f) g_q3k_hifi_outliers_below_005++;
+            if (outlier_mag < 0.10f) g_q3k_hifi_outliers_below_010++;
+
+            // Track how many would survive each threshold
+            if (outlier_mag >= 0.01f) block_outliers_above_001++;
+            if (outlier_mag >= 0.02f) block_outliers_above_002++;
+            if (outlier_mag >= 0.05f) block_outliers_above_005++;
+            if (outlier_mag >= 0.10f) block_outliers_above_010++;
         }
         // Zero out unused outlier slots (use 255 as sentinel for early exit in kernels)
         for (int outlier_k = max_outliers; outlier_k < Q3_K_HIFI_OUTLIERS; ++outlier_k) {
@@ -1516,6 +1603,12 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
         // Track outlier count per block
         g_q3k_hifi_outlier_count_histogram[max_outliers]++;
         g_q3k_hifi_total_blocks_quantized++;
+
+        // Track threshold survival histograms
+        g_q3k_hifi_threshold_001_histogram[block_outliers_above_001]++;
+        g_q3k_hifi_threshold_002_histogram[block_outliers_above_002]++;
+        g_q3k_hifi_threshold_005_histogram[block_outliers_above_005]++;
+        g_q3k_hifi_threshold_010_histogram[block_outliers_above_010]++;
 
         // Step 5: Zero out outliers and quantize inliers with standard Q3_K
         float inliers_only[Q3_K_HIFI_BLOCK_SIZE];
@@ -1528,6 +1621,22 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
         quantize_row_q3_K_impl(inliers_only, &q3k_block, Q3_K_HIFI_BLOCK_SIZE, NULL);
         memcpy(block->q3_k_data, &q3k_block, 110);
         memset(block->padding, 0, sizeof(block->padding));
+
+        // Diagnostic: Track outlier magnitude relative to block scale
+        float block_scale = GGML_FP16_TO_FP32(q3k_block.d);
+        if (block_scale > 0.0f) {
+            g_q3k_hifi_sum_block_scale += (double)block_scale;
+            if (block_scale > g_q3k_hifi_max_block_scale) g_q3k_hifi_max_block_scale = block_scale;
+            if (block_scale < g_q3k_hifi_min_block_scale) g_q3k_hifi_min_block_scale = block_scale;
+
+            for (int outlier_k = 0; outlier_k < max_outliers; ++outlier_k) {
+                float ratio = block_outlier_mags[outlier_k] / block_scale;
+                g_q3k_hifi_sum_outlier_to_scale_ratio += (double)ratio;
+                g_q3k_hifi_sum_outlier_to_scale_ratio_sq += (double)(ratio * ratio);
+                if (ratio > g_q3k_hifi_max_outlier_to_scale_ratio) g_q3k_hifi_max_outlier_to_scale_ratio = ratio;
+                if (ratio < g_q3k_hifi_min_outlier_to_scale_ratio) g_q3k_hifi_min_outlier_to_scale_ratio = ratio;
+            }
+        }
     }
 
     // === PRINT STATISTICS (every 1000 blocks or when env var is set) ===
@@ -1564,6 +1673,91 @@ static void quantize_row_q3_k_hifi_impl(const float * GGML_RESTRICT x, block_q3_
             fprintf(stderr, "  Max magnitude: %.6f\n", (double)g_q3k_hifi_max_outlier_magnitude);
             fprintf(stderr, "  Avg magnitude: %.6f\n", avg_magnitude);
             fprintf(stderr, "  Std deviation: %.6f\n", stddev);
+
+            // === DIAGNOSTIC: Threshold-based outlier analysis ===
+            fprintf(stderr, "\n--- DIAGNOSTIC: Threshold Analysis ---\n");
+            fprintf(stderr, "Outliers below magnitude thresholds:\n");
+            fprintf(stderr, "  < 0.01: %lld (%.2f%%) - potentially wasteful\n",
+                    (long long)g_q3k_hifi_outliers_below_001,
+                    100.0 * g_q3k_hifi_outliers_below_001 / g_q3k_hifi_total_outliers);
+            fprintf(stderr, "  < 0.02: %lld (%.2f%%)\n",
+                    (long long)g_q3k_hifi_outliers_below_002,
+                    100.0 * g_q3k_hifi_outliers_below_002 / g_q3k_hifi_total_outliers);
+            fprintf(stderr, "  < 0.05: %lld (%.2f%%)\n",
+                    (long long)g_q3k_hifi_outliers_below_005,
+                    100.0 * g_q3k_hifi_outliers_below_005 / g_q3k_hifi_total_outliers);
+            fprintf(stderr, "  < 0.10: %lld (%.2f%%)\n",
+                    (long long)g_q3k_hifi_outliers_below_010,
+                    100.0 * g_q3k_hifi_outliers_below_010 / g_q3k_hifi_total_outliers);
+
+            // Outlier-to-scale ratio statistics
+            double avg_ratio = g_q3k_hifi_sum_outlier_to_scale_ratio / g_q3k_hifi_total_outliers;
+            double ratio_variance = (g_q3k_hifi_sum_outlier_to_scale_ratio_sq / g_q3k_hifi_total_outliers) - (avg_ratio * avg_ratio);
+            double ratio_stddev = sqrt(ratio_variance > 0 ? ratio_variance : 0);
+
+            fprintf(stderr, "\nOutlier-to-Block-Scale Ratio (magnitude/d):\n");
+            fprintf(stderr, "  Min ratio: %.4f\n", (double)g_q3k_hifi_min_outlier_to_scale_ratio);
+            fprintf(stderr, "  Max ratio: %.4f\n", (double)g_q3k_hifi_max_outlier_to_scale_ratio);
+            fprintf(stderr, "  Avg ratio: %.4f\n", avg_ratio);
+            fprintf(stderr, "  Std dev:   %.4f\n", ratio_stddev);
+            fprintf(stderr, "  (Ratio < 1.0 means outlier is smaller than block scale - low impact)\n");
+
+            // Block scale statistics
+            double avg_block_scale = g_q3k_hifi_sum_block_scale / g_q3k_hifi_total_blocks_quantized;
+            fprintf(stderr, "\nBlock Scale (d) Statistics:\n");
+            fprintf(stderr, "  Min scale: %.6f\n", (double)g_q3k_hifi_min_block_scale);
+            fprintf(stderr, "  Max scale: %.6f\n", (double)g_q3k_hifi_max_block_scale);
+            fprintf(stderr, "  Avg scale: %.6f\n", avg_block_scale);
+
+            // Threshold survival histograms - what if we used fewer outliers?
+            fprintf(stderr, "\n--- THRESHOLD SURVIVAL ANALYSIS ---\n");
+            fprintf(stderr, "How many outliers per block would survive each threshold:\n");
+
+            fprintf(stderr, "\nThreshold >= 0.01:\n");
+            for (int i = 0; i <= Q3_K_HIFI_OUTLIERS; ++i) {
+                if (g_q3k_hifi_threshold_001_histogram[i] > 0) {
+                    double pct = 100.0 * g_q3k_hifi_threshold_001_histogram[i] / g_q3k_hifi_total_blocks_quantized;
+                    fprintf(stderr, "  %d outliers: %lld blocks (%.2f%%)\n", i, (long long)g_q3k_hifi_threshold_001_histogram[i], pct);
+                }
+            }
+
+            fprintf(stderr, "\nThreshold >= 0.02:\n");
+            for (int i = 0; i <= Q3_K_HIFI_OUTLIERS; ++i) {
+                if (g_q3k_hifi_threshold_002_histogram[i] > 0) {
+                    double pct = 100.0 * g_q3k_hifi_threshold_002_histogram[i] / g_q3k_hifi_total_blocks_quantized;
+                    fprintf(stderr, "  %d outliers: %lld blocks (%.2f%%)\n", i, (long long)g_q3k_hifi_threshold_002_histogram[i], pct);
+                }
+            }
+
+            fprintf(stderr, "\nThreshold >= 0.05:\n");
+            for (int i = 0; i <= Q3_K_HIFI_OUTLIERS; ++i) {
+                if (g_q3k_hifi_threshold_005_histogram[i] > 0) {
+                    double pct = 100.0 * g_q3k_hifi_threshold_005_histogram[i] / g_q3k_hifi_total_blocks_quantized;
+                    fprintf(stderr, "  %d outliers: %lld blocks (%.2f%%)\n", i, (long long)g_q3k_hifi_threshold_005_histogram[i], pct);
+                }
+            }
+
+            fprintf(stderr, "\nThreshold >= 0.10:\n");
+            for (int i = 0; i <= Q3_K_HIFI_OUTLIERS; ++i) {
+                if (g_q3k_hifi_threshold_010_histogram[i] > 0) {
+                    double pct = 100.0 * g_q3k_hifi_threshold_010_histogram[i] / g_q3k_hifi_total_blocks_quantized;
+                    fprintf(stderr, "  %d outliers: %lld blocks (%.2f%%)\n", i, (long long)g_q3k_hifi_threshold_010_histogram[i], pct);
+                }
+            }
+
+            // Summary recommendation
+            fprintf(stderr, "\n--- RECOMMENDATIONS ---\n");
+            double pct_below_005 = 100.0 * g_q3k_hifi_outliers_below_005 / g_q3k_hifi_total_outliers;
+            if (pct_below_005 > 50.0) {
+                fprintf(stderr, "WARNING: %.1f%% of outliers have magnitude < 0.05\n", pct_below_005);
+                fprintf(stderr, "  Consider using fewer outliers or adding magnitude threshold\n");
+            }
+            if (avg_ratio < 1.0) {
+                fprintf(stderr, "NOTE: Average outlier magnitude (%.4f) is smaller than block scale (%.4f)\n",
+                        avg_magnitude, avg_block_scale);
+                fprintf(stderr, "  These outliers may not significantly improve quality\n");
+            }
+            fprintf(stderr, "--- END DIAGNOSTIC ---\n");
         }
 
         // Outlier position heatmap (top 20 positions)
