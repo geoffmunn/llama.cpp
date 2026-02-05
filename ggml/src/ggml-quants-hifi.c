@@ -266,10 +266,10 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
     switch (cat) {
         case Q3_HIFI_SIZE_TINY:
             // ≤1.7B: Optimized outlier counts for small models
-            // Testing showed 4 outliers improves PPL by 1.88% for 0.6B vs Q3_K_M
-            // 2 outliers degraded 0.65% below baseline, testing 3 as middle ground
+            // Testing: 4 outliers = 1.88% improvement, 3 outliers = 1.17%, 2 outliers = -0.65%
+            // 4 outliers chosen for maximum quality (BPW identical across all counts)
             if (model_params_b <= 0.8f) {
-                return 3;  // 0.6B: Testing 3 outliers to balance quality vs efficiency
+                return 4;  // 0.6B: 4 outliers for optimal quality
             }
             return 2;  // 1.7B: Conservative outlier count
             
