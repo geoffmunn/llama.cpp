@@ -219,8 +219,9 @@ static float get_q3_hifi_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: Very minimal enhancement (2-3 layers only)
-        return 0.07f;
+        // 1.7B: Increased enhancement to match 4B treatment
+        // Testing shows 0.07f was too conservative vs Q3_K_M
+        return 0.20f;
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with current Q3_K_HIFI
@@ -590,10 +591,11 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             new_type = qs.i_attention_wv < 2 ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
-            // Q3_K_HIFI: Match Q3_K_M strategy exactly for attn_v
-            // Q3_K_M uses: Q5_K for first 2 layers, Q4_K for the rest
-            // We match this exactly - no Q3_K is used here, so no upgrade needed
-            new_type = qs.i_attention_wv < 2 ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
+            // Q3_K_HIFI: Scale-aware attn_v enhancement
+            // Use threshold function to determine how many layers get Q5_K
+            const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+            const float enhancement_threshold = get_q3_hifi_attn_v_threshold(model_params_b);
+            new_type = qs.i_attention_wv < qs.n_attention_wv * enhancement_threshold ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
             // Q4_K_HIFI: Model-size-aware enhancement to optimize size vs quality tradeoff
