@@ -265,14 +265,14 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
     
     switch (cat) {
         case Q3_HIFI_SIZE_TINY:
-            // ≤1.7B: Optimized outlier counts for small models
+            // ≤1.7B: Outlier counts scaled by model size
             // 0.6B testing: 4 outliers = +1.88%, 3 outliers = +1.17%, 2 outliers = -0.65%
-            // 1.7B testing: 2 outliers = -7.54% (insufficient)
-            // Small models need 4 outliers for quality preservation
+            // 1.7B testing: 4 outliers = -34.3%, 2 outliers = -7.54%
+            // Hypothesis: 1.7B needs more outliers (6-8) like medium models
             if (model_params_b <= 0.8f) {
-                return 4;  // 0.6B: 4 outliers for optimal quality
+                return 4;  // 0.6B: 4 outliers optimal
             }
-            return 4;  // 1.7B: 4 outliers (2 was insufficient, degraded 7.54%)
+            return 6;  // 1.7B: Testing 6 outliers (4 was insufficient)
             
         case Q3_HIFI_SIZE_MEDIUM:
             // 2B-8B: Full enhancement
