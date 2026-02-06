@@ -272,7 +272,7 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
             if (model_params_b <= 0.8f) {
                 return 4;  // 0.6B: 4 outliers optimal
             }
-            return 8;  // 1.7B: Testing 6 outliers (4 was insufficient)
+            return 4;  // 1.7B: Testing 6 outliers (4 was insufficient)
             
         case Q3_HIFI_SIZE_MEDIUM:
             // 2B-8B: Full enhancement
