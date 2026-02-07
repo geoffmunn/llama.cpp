@@ -219,12 +219,10 @@ static float get_q3_hifi_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: Ultra-surgical tensor selection (Q3_K_M baseline = 17.75 PPL)
-        // Ultra-surgical (q_proj+k_proj only):
-        //   0.07f + 4 outliers = 18.00 PPL (best so far)
-        //   0.07f + 3 outliers = 18.06 PPL
-        //   0.04f + 4 outliers = testing now
-        return 0.04f;
+        // 1.7B: NEW STRATEGY - Protect ALL attn_v with Q5_K
+        // Previous "ultra-surgical" approach failed (PPL 18.00 vs Q3_K_M 17.75)
+        // New approach: Q3_K_HIFI for bulk (q,k,gate,up), Q5_K for ALL attn_v
+        return 1.0f;  // 100% of attn_v layers get Q5_K
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with current Q3_K_HIFI
@@ -839,15 +837,22 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             bool is_safe_for_q3_k_hifi;
 
             if (is_1_7b_model) {
-                // 1.7B: Ultra-surgical - ONLY attention input projections
-                // Test results: q_proj+k_proj+gate_proj = PPL 18.38 (still worse than Q3_K_M 17.75)
-                // Now trying: q_proj+k_proj only (no FFN)
+                // 1.7B: NEW STRATEGY - Apply Q3_K_HIFI to BULK tensors
+                // Previous approach (restrict HIFI) failed because we had too many q4_K
+                // New approach: Use HIFI for bulk, protect SENSITIVE tensors with Q5_K
+                // Q3_K_HIFI for: q_proj, k_proj, gate_proj, up_proj (the bulk)
+                // Q5_K for: attn_v (very sensitive - handled separately)
+                // Q4_K for: o_proj, ffn_down (output projections)
                 is_safe_for_q3_k_hifi =
                     name.find("q_proj") != std::string::npos ||
                     name.find("k_proj") != std::string::npos ||
+                    name.find("gate_proj") != std::string::npos ||
+                    name.find("up_proj") != std::string::npos ||
                     name.find("attn_q") != std::string::npos ||
-                    name.find("attn_k") != std::string::npos;
-                // EXCLUDE for 1.7B: v_proj, gate_proj, up_proj, all FFN layers
+                    name.find("attn_k") != std::string::npos ||
+                    name.find("ffn_gate") != std::string::npos ||
+                    name.find("ffn_up") != std::string::npos;
+                // EXCLUDE: v_proj (gets Q5_K), o_proj, ffn_down (get Q4_K)
             } else {
                 // 0.6B, 4B+: Full input projection coverage
                 is_safe_for_q3_k_hifi =
