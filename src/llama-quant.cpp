@@ -219,15 +219,15 @@ static float get_q3_hifi_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: Conservative enhancement (Q3_K_M baseline = 17.75 PPL)
-        // Tested: 0.07f with 6 outliers = 18.56 PPL (best HIFI so far)
-        //         0.03f with 6 outliers = 18.59 PPL
-        //         0.07f with 4 outliers = 18.64 PPL
-        //         0.20f with 6 outliers = 23.00 PPL (too aggressive)
-        //         0.20f with 4 outliers = 18.65 PPL
-        //         0.0f with 6 outliers = testing (no attn_v enhancement)
-        // Note: Q3_K_HIFI doesn't beat Q3_K_M on 1.7B (does on 0.6B, 4B)
-        return 0.0f;
+        // 1.7B: Surgical tensor selection (Q3_K_M baseline = 17.75 PPL)
+        // Broad coverage tests (all input projections):
+        //   0.07f + 6 outliers = 18.56 PPL
+        //   0.03f + 6 outliers = 18.59 PPL
+        //   0.00f + 6 outliers = 18.64 PPL
+        //   0.07f + 4 outliers = 18.64 PPL
+        // Surgical test (only q_proj, k_proj, gate_proj):
+        //   0.07f + 4 outliers = testing now
+        return 0.07f;
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with current Q3_K_HIFI
@@ -832,20 +832,42 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                 }
             }
         } else {
+            // Get model size for size-aware tensor selection
+            const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+            const bool is_1_7b_model = (model_params_b > 1.0f && model_params_b <= 2.0f);
+
             // Check if this is a safe input layer for Q3_K_HIFI
-            bool is_safe_for_q3_k_hifi = 
-                name.find("q_proj") != std::string::npos ||
-                name.find("k_proj") != std::string::npos ||
-                name.find("v_proj") != std::string::npos ||
-                name.find("gate_proj") != std::string::npos ||
-                name.find("up_proj") != std::string::npos ||
-                name.find("attn_q") != std::string::npos ||
-                name.find("attn_k") != std::string::npos ||
-                name.find("attn_v") != std::string::npos ||
-                name.find("ffn_gate") != std::string::npos ||
-                name.find("ffn_up") != std::string::npos ||
-                name.find("wqkv") != std::string::npos ||  // Combined QKV projection
-                name.find("qkv") != std::string::npos;     // Alternative QKV naming
+            // For 1.7B models: ONLY apply to q_proj, k_proj, gate_proj (most critical)
+            // For other sizes: Apply to all input projections
+            bool is_safe_for_q3_k_hifi;
+
+            if (is_1_7b_model) {
+                // 1.7B: Surgical precision - only the most critical tensors
+                // Testing showed 1.7B needs minimal HIFI coverage to beat Q3_K_M
+                is_safe_for_q3_k_hifi =
+                    name.find("q_proj") != std::string::npos ||
+                    name.find("k_proj") != std::string::npos ||
+                    name.find("gate_proj") != std::string::npos ||
+                    name.find("attn_q") != std::string::npos ||
+                    name.find("attn_k") != std::string::npos ||
+                    name.find("ffn_gate") != std::string::npos;
+                // EXCLUDE for 1.7B: v_proj, up_proj, attn_v, ffn_up, wqkv, qkv
+            } else {
+                // 0.6B, 4B+: Full input projection coverage
+                is_safe_for_q3_k_hifi =
+                    name.find("q_proj") != std::string::npos ||
+                    name.find("k_proj") != std::string::npos ||
+                    name.find("v_proj") != std::string::npos ||
+                    name.find("gate_proj") != std::string::npos ||
+                    name.find("up_proj") != std::string::npos ||
+                    name.find("attn_q") != std::string::npos ||
+                    name.find("attn_k") != std::string::npos ||
+                    name.find("attn_v") != std::string::npos ||
+                    name.find("ffn_gate") != std::string::npos ||
+                    name.find("ffn_up") != std::string::npos ||
+                    name.find("wqkv") != std::string::npos ||  // Combined QKV projection
+                    name.find("qkv") != std::string::npos;     // Alternative QKV naming
+            }
             
             // For ffn_down: only allow Q3_K_HIFI if Q3_K_M would use Q3_K (FALCON with !use_more_bits)
             if (name.find("ffn_down") != std::string::npos) {
