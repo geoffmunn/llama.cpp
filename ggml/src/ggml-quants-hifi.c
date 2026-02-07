@@ -469,9 +469,8 @@ float ggml_q3_hifi_get_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: Testing lower thresholds with 6 outliers
-        // 0.03f = testing now (less HIFI overhead)
-        return 0.03f;
+        // 1.7B: Testing 0.0f (no attn_v enhancement) with 6 outliers
+        return 0.0f;
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with Q3_K_HIFI
