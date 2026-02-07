@@ -270,11 +270,12 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
             // 1.7B testing (Q3_K_M baseline = 17.75 PPL):
             //   Broad coverage: 6 outliers = 18.56, 4 outliers = 18.64
             //   Surgical (q_proj+k_proj+gate_proj): 4 outliers = 18.38
-            //   Ultra-surgical (q_proj+k_proj only): 4 outliers = testing now
+            //   Ultra-surgical (q_proj+k_proj only): 4 outliers = 18.00
+            //   Ultra-surgical (q_proj+k_proj only): 3 outliers = testing now
             if (model_params_b <= 0.8f) {
                 return 4;  // 0.6B: 4 outliers optimal
             }
-            return 4;  // 1.7B: 4 outliers with ultra-surgical tensor selection
+            return 3;  // 1.7B: 3 outliers with ultra-surgical tensor selection
             
         case Q3_HIFI_SIZE_MEDIUM:
             // 2B-8B: Full enhancement
