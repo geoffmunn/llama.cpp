@@ -270,12 +270,12 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
             // 1.7B testing (Q3_K_M baseline = 17.75 PPL):
             //   Broad coverage: 6 outliers = 18.56, 4 outliers = 18.64
             //   Surgical (q_proj+k_proj+gate_proj): 4 outliers = 18.38
-            //   Ultra-surgical (q_proj+k_proj only): 4 outliers = 18.00
-            //   Ultra-surgical (q_proj+k_proj only): 3 outliers = testing now
+            //   Ultra-surgical (q_proj+k_proj only): 4 outliers = 18.00 (best)
+            //   Ultra-surgical (q_proj+k_proj only): 3 outliers = 18.06
             if (model_params_b <= 0.8f) {
                 return 4;  // 0.6B: 4 outliers optimal
             }
-            return 3;  // 1.7B: 3 outliers with ultra-surgical tensor selection
+            return 4;  // 1.7B: 4 outliers with ultra-surgical tensor selection
             
         case Q3_HIFI_SIZE_MEDIUM:
             // 2B-8B: Full enhancement
@@ -470,9 +470,9 @@ float ggml_q3_hifi_get_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: Using surgical tensor selection (only q_proj, k_proj, gate_proj)
-        // attn_v threshold less relevant since v_proj excluded from Q3_K_HIFI
-        return 0.07f;
+        // 1.7B: Ultra-surgical (only q_proj, k_proj)
+        // Testing lower attn_v thresholds: 0.07 = 18.00, 0.04 = testing
+        return 0.04f;
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with Q3_K_HIFI

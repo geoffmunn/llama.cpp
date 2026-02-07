@@ -219,15 +219,12 @@ static float get_q3_hifi_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: Surgical tensor selection (Q3_K_M baseline = 17.75 PPL)
-        // Broad coverage tests (all input projections):
-        //   0.07f + 6 outliers = 18.56 PPL
-        //   0.03f + 6 outliers = 18.59 PPL
-        //   0.00f + 6 outliers = 18.64 PPL
-        //   0.07f + 4 outliers = 18.64 PPL
-        // Surgical test (only q_proj, k_proj, gate_proj):
-        //   0.07f + 4 outliers = testing now
-        return 0.07f;
+        // 1.7B: Ultra-surgical tensor selection (Q3_K_M baseline = 17.75 PPL)
+        // Ultra-surgical (q_proj+k_proj only):
+        //   0.07f + 4 outliers = 18.00 PPL (best so far)
+        //   0.07f + 3 outliers = 18.06 PPL
+        //   0.04f + 4 outliers = testing now
+        return 0.04f;
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with current Q3_K_HIFI
