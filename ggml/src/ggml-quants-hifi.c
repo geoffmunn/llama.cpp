@@ -267,15 +267,14 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
         case Q3_HIFI_SIZE_TINY:
             // ≤1.7B: Outlier counts scaled by model size
             // 0.6B testing: 4 outliers = +1.88%, 3 outliers = +1.17%, 2 outliers = -0.65%
-            // 1.7B testing (broad Q3_K_HIFI coverage):
-            //   6 outliers + attn_v=0.07 = PPL 18.56 (Q3_K_M baseline = 17.75)
-            //   4 outliers + attn_v=0.07 = PPL 18.64
-            // 1.7B testing (surgical: only q_proj, k_proj, gate_proj):
-            //   4 outliers = testing now
+            // 1.7B testing (Q3_K_M baseline = 17.75 PPL):
+            //   Broad coverage: 6 outliers = 18.56, 4 outliers = 18.64
+            //   Surgical (q_proj+k_proj+gate_proj): 4 outliers = 18.38
+            //   Ultra-surgical (q_proj+k_proj only): 4 outliers = testing now
             if (model_params_b <= 0.8f) {
                 return 4;  // 0.6B: 4 outliers optimal
             }
-            return 4;  // 1.7B: 4 outliers with surgical tensor selection
+            return 4;  // 1.7B: 4 outliers with ultra-surgical tensor selection
             
         case Q3_HIFI_SIZE_MEDIUM:
             // 2B-8B: Full enhancement

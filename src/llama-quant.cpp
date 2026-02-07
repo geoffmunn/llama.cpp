@@ -842,16 +842,15 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             bool is_safe_for_q3_k_hifi;
 
             if (is_1_7b_model) {
-                // 1.7B: Surgical precision - only the most critical tensors
-                // Testing showed 1.7B needs minimal HIFI coverage to beat Q3_K_M
+                // 1.7B: Ultra-surgical - ONLY attention input projections
+                // Test results: q_proj+k_proj+gate_proj = PPL 18.38 (still worse than Q3_K_M 17.75)
+                // Now trying: q_proj+k_proj only (no FFN)
                 is_safe_for_q3_k_hifi =
                     name.find("q_proj") != std::string::npos ||
                     name.find("k_proj") != std::string::npos ||
-                    name.find("gate_proj") != std::string::npos ||
                     name.find("attn_q") != std::string::npos ||
-                    name.find("attn_k") != std::string::npos ||
-                    name.find("ffn_gate") != std::string::npos;
-                // EXCLUDE for 1.7B: v_proj, up_proj, attn_v, ffn_up, wqkv, qkv
+                    name.find("attn_k") != std::string::npos;
+                // EXCLUDE for 1.7B: v_proj, gate_proj, up_proj, all FFN layers
             } else {
                 // 0.6B, 4B+: Full input projection coverage
                 is_safe_for_q3_k_hifi =
