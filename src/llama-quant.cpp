@@ -219,9 +219,11 @@ static float get_q3_hifi_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: Increased enhancement to match 4B treatment
-        // Testing shows 0.07f was too conservative vs Q3_K_M
-        return 0.20f;
+        // 1.7B: Conservative enhancement
+        // Testing: 0.20f with 6 outliers = 23.0 PPL (bad)
+        //          0.20f with 4 outliers = 18.65 PPL
+        //          0.07f with 4 outliers = testing now
+        return 0.07f;
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with current Q3_K_HIFI
