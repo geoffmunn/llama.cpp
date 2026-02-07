@@ -219,10 +219,10 @@ static float get_q3_hifi_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: NEW STRATEGY - Protect ALL attn_v with Q5_K
-        // Previous "ultra-surgical" approach failed (PPL 18.00 vs Q3_K_M 17.75)
-        // New approach: Q3_K_HIFI for bulk (q,k,gate,up), Q5_K for ALL attn_v
-        return 1.0f;  // 100% of attn_v layers get Q5_K
+        // 1.7B: Match Q3_K_M behavior exactly (first 2 layers get Q5_K)
+        // Q3_K_HIFI is disabled for 1.7B models - this just ensures attn_v matches Q3_K_M
+        // Q3_K_M uses: qs.i_attention_wv < 2, so threshold = 2/28 ≈ 0.07
+        return 0.07f;
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with current Q3_K_HIFI
@@ -837,22 +837,13 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             bool is_safe_for_q3_k_hifi;
 
             if (is_1_7b_model) {
-                // 1.7B: NEW STRATEGY - Apply Q3_K_HIFI to BULK tensors
-                // Previous approach (restrict HIFI) failed because we had too many q4_K
-                // New approach: Use HIFI for bulk, protect SENSITIVE tensors with Q5_K
-                // Q3_K_HIFI for: q_proj, k_proj, gate_proj, up_proj (the bulk)
-                // Q5_K for: attn_v (very sensitive - handled separately)
-                // Q4_K for: o_proj, ffn_down (output projections)
-                is_safe_for_q3_k_hifi =
-                    name.find("q_proj") != std::string::npos ||
-                    name.find("k_proj") != std::string::npos ||
-                    name.find("gate_proj") != std::string::npos ||
-                    name.find("up_proj") != std::string::npos ||
-                    name.find("attn_q") != std::string::npos ||
-                    name.find("attn_k") != std::string::npos ||
-                    name.find("ffn_gate") != std::string::npos ||
-                    name.find("ffn_up") != std::string::npos;
-                // EXCLUDE: v_proj (gets Q5_K), o_proj, ffn_down (get Q4_K)
+                // 1.7B: DISABLE Q3_K_HIFI ENTIRELY - fall back to Q3_K_M behavior
+                // Extensive testing showed Q3_K_HIFI hurts 1.7B regardless of strategy:
+                //   Ultra-surgical (q+k only): PPL 18.00 vs Q3_K_M 17.75
+                //   Bulk (q+k+gate+up): PPL 18.58 - even worse!
+                // The outlier overhead is not justified at this model scale.
+                // Q3_K_HIFI still provides benefits for 0.6B and 4B+ models.
+                is_safe_for_q3_k_hifi = false;  // No Q3_K_HIFI tensors for 1.7B
             } else {
                 // 0.6B, 4B+: Full input projection coverage
                 is_safe_for_q3_k_hifi =

@@ -267,14 +267,15 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
         case Q3_HIFI_SIZE_TINY:
             // ≤1.7B: Outlier counts scaled by model size
             // 0.6B testing: 4 outliers = +1.88%, 3 outliers = +1.17%, 2 outliers = -0.65%
-            // 1.7B NEW STRATEGY (Q3_K_M baseline = 17.75 PPL):
-            //   Previous approach (restrict HIFI) failed at 18.00 PPL
-            //   NEW: Q3_K_HIFI for bulk (q,k,gate,up), Q5_K for ALL attn_v
-            //   This matches Q3_K_M tensor efficiency while adding HIFI precision
+            // 1.7B: Q3_K_HIFI DISABLED (Q3_K_M baseline = 17.75 PPL)
+            //   Extensive testing showed Q3_K_HIFI hurts 1.7B regardless of strategy:
+            //   - Ultra-surgical (q+k only): PPL 18.00
+            //   - Bulk (q+k+gate+up): PPL 18.58
+            //   Solution: Disable Q3_K_HIFI for 1.7B, fallback to Q3_K_M behavior
             if (model_params_b <= 0.8f) {
                 return 4;  // 0.6B: 4 outliers optimal
             }
-            return 4;  // 1.7B: 4 outliers with new bulk HIFI strategy
+            return 0;  // 1.7B: Q3_K_HIFI disabled - no outliers needed
             
         case Q3_HIFI_SIZE_MEDIUM:
             // 2B-8B: Full enhancement
@@ -469,9 +470,10 @@ float ggml_q3_hifi_get_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: NEW STRATEGY - Protect ALL attn_v with Q5_K
-        // Q3_K_HIFI for bulk (q,k,gate,up), Q5_K for ALL attn_v
-        return 1.0f;  // 100% of attn_v layers get Q5_K
+        // 1.7B: Q3_K_HIFI DISABLED - match Q3_K_M behavior exactly
+        // Testing showed Q3_K_HIFI hurts 1.7B regardless of strategy
+        // Q3_K_M uses: first 2 layers get Q5_K, so threshold = 2/28 ≈ 0.07
+        return 0.07f;
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with Q3_K_HIFI
