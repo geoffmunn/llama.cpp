@@ -267,12 +267,14 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
         case Q3_HIFI_SIZE_TINY:
             // ≤1.7B: Outlier counts scaled by model size
             // 0.6B testing: 4 outliers = +1.88%, 3 outliers = +1.17%, 2 outliers = -0.65%
-            // 1.7B testing: 4 outliers = -34.3%, 2 outliers = -7.54%
-            // Hypothesis: 1.7B needs more outliers (6-8) like medium models
+            // 1.7B testing (attn_v=0.07):
+            //   6 outliers = PPL 18.56 (best HIFI, but Q3_K_M baseline = 17.75)
+            //   4 outliers = PPL 18.64
+            //   6 outliers + attn_v=0.20 = PPL 23.00 (too aggressive)
             if (model_params_b <= 0.8f) {
                 return 4;  // 0.6B: 4 outliers optimal
             }
-            return 4;  // 1.7B: Testing 6 outliers (4 was insufficient)
+            return 6;  // 1.7B: 6 outliers with 0.07 attn_v threshold
             
         case Q3_HIFI_SIZE_MEDIUM:
             // 2B-8B: Full enhancement
@@ -467,9 +469,9 @@ float ggml_q3_hifi_get_attn_v_threshold(float model_params_b) {
         // This addresses the +2.2% PPL regression seen at 0.6B
         return 0.0f;
     } else if (model_params_b <= 1.7f) {
-        // 1.7B: Increased enhancement to match 4B treatment
-        // Testing shows 0.07f was too conservative vs Q3_K_M
-        return 0.20f;
+        // 1.7B: Testing lower thresholds with 6 outliers
+        // 0.03f = testing now (less HIFI overhead)
+        return 0.03f;
     } else if (model_params_b <= 5.0f) {
         // 2-5B: Full enhancement - this is the sweet spot
         // 4B shows -2.9% PPL improvement with Q3_K_HIFI
