@@ -2307,6 +2307,36 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst);
             return;
         }
+
+        // For HIFI types (and other quantized types without MMQ support) with large
+        // batch sizes (ne2 > MMVQ_MAX_BATCH_SIZE), chunk tokens into MMVQ_MAX_BATCH_SIZE
+        // groups and call ggml_cuda_mul_mat_vec_q for each chunk.  This bypasses the
+        // fallback gather/compute path that breaks for these types.
+        if (ggml_is_quantized(src0->type) &&
+                !ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
+            for (int64_t chunk_start = 0; chunk_start < ne12; chunk_start += MMVQ_MAX_BATCH_SIZE) {
+                const int64_t chunk_n = std::min((int64_t)MMVQ_MAX_BATCH_SIZE, ne12 - chunk_start);
+
+                ggml_tensor chunk_src1 = *src1;
+                chunk_src1.ne[2] = chunk_n;
+                chunk_src1.nb[3] = chunk_n * chunk_src1.nb[2];
+                chunk_src1.data  = (char *) src1->data + chunk_start * src1->nb[2];
+
+                ggml_tensor chunk_ids = *ids;
+                chunk_ids.ne[1] = chunk_n;
+                chunk_ids.nb[2] = chunk_n * chunk_ids.nb[1];
+                chunk_ids.nb[3] = chunk_ids.nb[2];
+                chunk_ids.data  = (char *) ids->data + chunk_start * ids->nb[1];
+
+                ggml_tensor chunk_dst = *dst;
+                chunk_dst.ne[2] = chunk_n;
+                chunk_dst.nb[3] = chunk_n * chunk_dst.nb[2];
+                chunk_dst.data  = (char *) dst->data + chunk_start * dst->nb[2];
+
+                ggml_cuda_mul_mat_vec_q(ctx, src0, &chunk_src1, &chunk_ids, &chunk_dst);
+            }
+            return;
+        }
     }
 
     cudaStream_t stream = ctx.stream();
