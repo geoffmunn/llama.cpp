@@ -2282,7 +2282,11 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
             if (ggml_is_quantized(src0->type)) {
-                if (ne2 <= 4) {
+                // For standard quantized types that have MMQ support, use MMVQ only for
+                // small batches (ne2 <= 4); larger batches go to MMQ which is more efficient.
+                // For HIFI types that have no MMQ implementation, MMVQ is the only quantized
+                // path, so use it for the full MMVQ_MAX_BATCH_SIZE range.
+                if (ne2 <= 4 || !ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
                     ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
                     return;
                 }
@@ -2406,8 +2410,37 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         dst_slice.nb[3]  = dst_slice.ne[2] * dst_slice.nb[2];
         dst_slice.data   = dst_data_cur;
 
-        ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
-        CUDA_CHECK(cudaGetLastError());
+        // HIFI quantized types have no MMQ implementation, so for large per-expert
+        // batches that exceed MMVQ_MAX_BATCH_SIZE they would fall through ggml_cuda_mul_mat
+        // to cuBLAS which cannot handle quantized weights.  Split into sub-batches that
+        // each fit within MMVQ_MAX_BATCH_SIZE so the MMVQ path is always taken.
+        const bool needs_mmvq_chunks = ggml_is_quantized(src0->type)
+            && !ggml_cuda_should_use_mmq(src0->type, cc, tokens_per_expert[i02], /*n_experts=*/0)
+            && tokens_per_expert[i02] > MMVQ_MAX_BATCH_SIZE;
+
+        if (needs_mmvq_chunks) {
+            for (int64_t chunk = 0; chunk < tokens_per_expert[i02]; chunk += MMVQ_MAX_BATCH_SIZE) {
+                const int64_t chunk_n = std::min((int64_t)MMVQ_MAX_BATCH_SIZE, tokens_per_expert[i02] - chunk);
+
+                ggml_tensor chunk_src1 = src1_slice;
+                chunk_src1.ne[1] = chunk_n;
+                chunk_src1.nb[2] = chunk_n * chunk_src1.nb[1];
+                chunk_src1.nb[3] = chunk_src1.nb[2];
+                chunk_src1.data  = (char *) src1_slice.data + chunk * src1_slice.nb[1];
+
+                ggml_tensor chunk_dst = dst_slice;
+                chunk_dst.ne[1] = chunk_n;
+                chunk_dst.nb[2] = chunk_n * chunk_dst.nb[1];
+                chunk_dst.nb[3] = chunk_dst.nb[2];
+                chunk_dst.data  = (char *) dst_slice.data + chunk * dst_slice.nb[1];
+
+                ggml_cuda_mul_mat(ctx, &src0_slice, &chunk_src1, &chunk_dst);
+                CUDA_CHECK(cudaGetLastError());
+            }
+        } else {
+            ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
+            CUDA_CHECK(cudaGetLastError());
+        }
 
         src1_data_cur += src1_slice.nb[2];
         dst_data_cur  +=  dst_slice.nb[2];
