@@ -2309,13 +2309,15 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         }
 
         // For HIFI types (and other quantized types without MMQ support) with large
-        // batch sizes (ne2 > MMVQ_MAX_BATCH_SIZE), chunk tokens into MMVQ_MAX_BATCH_SIZE
-        // groups and call ggml_cuda_mul_mat_vec_q for each chunk.  This bypasses the
-        // fallback gather/compute path that breaks for these types.
+        // batch sizes (ne2 > MMVQ_MAX_BATCH_SIZE), process one token at a time using
+        // ggml_cuda_mul_mat_vec_q.  This bypasses the fallback gather/compute path that
+        // breaks for these types.  We use chunk_n=1 (single-token) to stay on the
+        // is_multi_token_id=false MMVQ kernel path; the multi-token (is_multi_token_id=true)
+        // path triggers an illegal memory access for HIFI types.
         if (ggml_is_quantized(src0->type) &&
                 !ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
-            for (int64_t chunk_start = 0; chunk_start < ne12; chunk_start += MMVQ_MAX_BATCH_SIZE) {
-                const int64_t chunk_n = std::min((int64_t)MMVQ_MAX_BATCH_SIZE, ne12 - chunk_start);
+            for (int64_t chunk_start = 0; chunk_start < ne12; chunk_start++) {
+                const int64_t chunk_n = 1;
 
                 ggml_tensor chunk_src1 = *src1;
                 chunk_src1.ne[2] = chunk_n;
