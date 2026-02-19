@@ -2250,6 +2250,23 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
     } else if (!split && use_mul_mat_q) {
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
+    } else if (!split && ggml_is_quantized(src0->type) && !bad_padding_clear
+            && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        // Fix 4: Quantized types not supported by MMQ (e.g. HIFI types) with ne1 > MMVQ_MAX_BATCH_SIZE.
+        // Chunk over the ne1 (batch/token) dimension and call ggml_cuda_mul_mat_vec_q for each chunk.
+        // No ids (has_ids=false), so is_multi_token_id is never triggered.
+        // Without this, such types fall through to ggml_cuda_op_mul_mat_cublas which cannot handle
+        // quantized data and causes an illegal memory access (detected lazily in the next CUDA op).
+        for (int64_t col_start = 0; col_start < src1->ne[1]; col_start += MMVQ_MAX_BATCH_SIZE) {
+            const int64_t chunk_n = std::min((int64_t)MMVQ_MAX_BATCH_SIZE, src1->ne[1] - col_start);
+            ggml_tensor chunk_src1 = *src1;
+            chunk_src1.ne[1] = chunk_n;
+            chunk_src1.data  = (char *) src1->data + col_start * src1->nb[1];
+            ggml_tensor chunk_dst = *dst;
+            chunk_dst.ne[1] = chunk_n;
+            chunk_dst.data  = (char *) dst->data + col_start * dst->nb[1];
+            ggml_cuda_mul_mat_vec_q(ctx, src0, &chunk_src1, nullptr, &chunk_dst);
+        }
     } else if (!split && (use_batched_cublas_f16 || use_batched_cublas_bf16 || use_batched_cublas_f32)
         && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
         // general KQ + KQV multi-batch without FlashAttention
