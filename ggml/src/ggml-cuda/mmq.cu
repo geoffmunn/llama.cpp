@@ -204,6 +204,21 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_IQ4_NL:
             mul_mat_q_case<GGML_TYPE_IQ4_NL>(ctx, args, stream);
             break;
+        case GGML_TYPE_Q2_K_LITE:
+            mul_mat_q_case<GGML_TYPE_Q2_K_LITE>(ctx, args, stream);
+            break;
+        case GGML_TYPE_Q3_K_LITE:
+            mul_mat_q_case<GGML_TYPE_Q3_K_LITE>(ctx, args, stream);
+            break;
+        case GGML_TYPE_Q4_K_LITE:
+            mul_mat_q_case<GGML_TYPE_Q4_K_LITE>(ctx, args, stream);
+            break;
+        case GGML_TYPE_Q5_K_LITE:
+            mul_mat_q_case<GGML_TYPE_Q5_K_LITE>(ctx, args, stream);
+            break;
+        case GGML_TYPE_Q6_K_LITE:
+            mul_mat_q_case<GGML_TYPE_Q6_K_LITE>(ctx, args, stream);
+            break;
         default:
             GGML_ABORT("fatal error");
             break;
@@ -316,21 +331,16 @@ void ggml_cuda_mul_mat_q(
             return;
         }
 
-#define LITE_MMQ_PATH(TNAME, LITE_T, BASE_SIZE, BASE_GGML_TYPE, MAX_RES) \
+        // LITE types: native MMQ (reads LITE blocks directly, correct stride, no compact-copy) + residual pass.
+#define LITE_MMQ_PATH(TNAME, LITE_T, MAX_RES) \
         if (src0->type == GGML_TYPE_##TNAME) { \
-            const int64_t n_blocks = (ne00 / QK_K) * ne01; \
-            ggml_cuda_pool_alloc<char> base_compact(ctx.pool(), n_blocks * BASE_SIZE); \
-            const int nth = 256; \
-            ggml_cuda_compact_##TNAME##_to_base<<<(n_blocks + nth - 1) / nth, nth, 0, stream>>>( \
-                src0_d, base_compact.get(), n_blocks); \
-            CUDA_CHECK(cudaGetLastError()); \
-            const mmq_args args_base = { \
-                base_compact.get(), BASE_GGML_TYPE, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d, \
+            const mmq_args args_lite = { \
+                src0_d, GGML_TYPE_##TNAME, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d, \
                 ne00, ne01, ne1, s01, ne11, s1, \
                 ne02, ne12, s02, s12, s2, \
                 ne03, ne13, s03, s13, s3, \
                 use_stream_k, ne1}; \
-            ggml_cuda_mul_mat_q_switch_type(ctx, args_base, stream); \
+            ggml_cuda_mul_mat_q_switch_type(ctx, args_lite, stream); \
             const int64_t stride_src1 = src1->nb[1] / (int64_t)sizeof(float); \
             const int64_t stride_dst  = dst->nb[1]  / (int64_t)sizeof(float); \
             const int64_t n_blocks_per_row = ne00 / QK_K; \
@@ -342,11 +352,11 @@ void ggml_cuda_mul_mat_q(
             return; \
         }
 
-        LITE_MMQ_PATH(Q2_K_LITE, block_q2_k_lite, sizeof(block_q2_K), GGML_TYPE_Q2_K, Q2_K_LITE_MAX_RESIDUALS)
-        LITE_MMQ_PATH(Q3_K_LITE, block_q3_k_lite, sizeof(block_q2_K), GGML_TYPE_Q2_K, Q3_K_LITE_MAX_RESIDUALS)  // base = Q2_K
-        LITE_MMQ_PATH(Q4_K_LITE, block_q4_k_lite, sizeof(block_q3_K), GGML_TYPE_Q3_K, Q4_K_LITE_MAX_RESIDUALS)  // base = Q3_K
-        LITE_MMQ_PATH(Q5_K_LITE, block_q5_k_lite, sizeof(block_q4_K), GGML_TYPE_Q4_K, Q5_K_LITE_MAX_RESIDUALS)  // base = Q4_K
-        LITE_MMQ_PATH(Q6_K_LITE, block_q6_k_lite, sizeof(block_q5_K), GGML_TYPE_Q5_K, Q6_K_LITE_MAX_RESIDUALS)  // base = Q5_K
+        LITE_MMQ_PATH(Q2_K_LITE, block_q2_k_lite, Q2_K_LITE_MAX_RESIDUALS)
+        LITE_MMQ_PATH(Q3_K_LITE, block_q3_k_lite, Q3_K_LITE_MAX_RESIDUALS)
+        LITE_MMQ_PATH(Q4_K_LITE, block_q4_k_lite, Q4_K_LITE_MAX_RESIDUALS)
+        LITE_MMQ_PATH(Q5_K_LITE, block_q5_k_lite, Q5_K_LITE_MAX_RESIDUALS)
+        LITE_MMQ_PATH(Q6_K_LITE, block_q6_k_lite, Q6_K_LITE_MAX_RESIDUALS)
 
         const mmq_args args = {
             src0_d, src0->type, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d,
@@ -449,24 +459,18 @@ void ggml_cuda_op_mul_mat_q(
                             || GGML_CUDA_CC_IS_CDNA(cc))
                             && src1_ncols == ne11;
 
-    // LITE types need compact copy + base MMQ + residual correction (same as LITE_MMQ_PATH but
-    // operating on a row slice src0_dd_i in the split/op path).
-#define LITE_OP_MMQ_PATH(TNAME, LITE_T, BASE_SIZE, BASE_GGML_TYPE, MAX_RES) \
+    // LITE types: native MMQ (no compact-copy) + optional residual pass.
+#define LITE_OP_MMQ_PATH(TNAME, LITE_T, MAX_RES) \
     if (src0->type == GGML_TYPE_##TNAME) { \
-        const int64_t n_blocks = row_diff * stride01; \
-        ggml_cuda_pool_alloc<char> base_compact(ctx.pool(), n_blocks * (BASE_SIZE)); \
-        const int nth = 256; \
-        ggml_cuda_compact_##TNAME##_to_base<<<(n_blocks + nth - 1) / nth, nth, 0, stream>>>( \
-            src0_dd_i, base_compact.get(), n_blocks); \
-        CUDA_CHECK(cudaGetLastError()); \
-        const mmq_args args_base = { \
-            base_compact.get(), (BASE_GGML_TYPE), (const int *) src1_ddq_i, nullptr, nullptr, dst_dd_i, \
+        const mmq_args args_lite = { \
+            src0_dd_i, GGML_TYPE_##TNAME, (const int *) src1_ddq_i, nullptr, nullptr, dst_dd_i, \
             ne00, row_diff, src1_ncols, stride01, ne11, nrows_dst, \
             1, 1, 0, 0, 0, \
             1, 1, 0, 0, 0, \
             use_stream_k, src1_ncols}; \
-        ggml_cuda_mul_mat_q_switch_type(ctx, args_base, stream); \
+        ggml_cuda_mul_mat_q_switch_type(ctx, args_lite, stream); \
         if (src1_ddf_i) { \
+            const int64_t n_blocks = row_diff * stride01; \
             const int64_t stride_src1 = src1->ne[0]; \
             ggml_cuda_add_lite_residuals<LITE_T, (MAX_RES)><<<(n_blocks + 255) / 256, 256, 0, stream>>>( \
                 (const LITE_T *)src0_dd_i, src1_ddf_i, dst_dd_i, \
@@ -476,11 +480,11 @@ void ggml_cuda_op_mul_mat_q(
         return; \
     }
 
-    LITE_OP_MMQ_PATH(Q2_K_LITE, block_q2_k_lite, sizeof(block_q2_K), GGML_TYPE_Q2_K, Q2_K_LITE_MAX_RESIDUALS)
-    LITE_OP_MMQ_PATH(Q3_K_LITE, block_q3_k_lite, sizeof(block_q2_K), GGML_TYPE_Q2_K, Q3_K_LITE_MAX_RESIDUALS)
-    LITE_OP_MMQ_PATH(Q4_K_LITE, block_q4_k_lite, sizeof(block_q3_K), GGML_TYPE_Q3_K, Q4_K_LITE_MAX_RESIDUALS)
-    LITE_OP_MMQ_PATH(Q5_K_LITE, block_q5_k_lite, sizeof(block_q4_K), GGML_TYPE_Q4_K, Q5_K_LITE_MAX_RESIDUALS)
-    LITE_OP_MMQ_PATH(Q6_K_LITE, block_q6_k_lite, sizeof(block_q5_K), GGML_TYPE_Q5_K, Q6_K_LITE_MAX_RESIDUALS)
+    LITE_OP_MMQ_PATH(Q2_K_LITE, block_q2_k_lite, Q2_K_LITE_MAX_RESIDUALS)
+    LITE_OP_MMQ_PATH(Q3_K_LITE, block_q3_k_lite, Q3_K_LITE_MAX_RESIDUALS)
+    LITE_OP_MMQ_PATH(Q4_K_LITE, block_q4_k_lite, Q4_K_LITE_MAX_RESIDUALS)
+    LITE_OP_MMQ_PATH(Q5_K_LITE, block_q5_k_lite, Q5_K_LITE_MAX_RESIDUALS)
+    LITE_OP_MMQ_PATH(Q6_K_LITE, block_q6_k_lite, Q6_K_LITE_MAX_RESIDUALS)
 #undef LITE_OP_MMQ_PATH
 
     const mmq_args args = {
