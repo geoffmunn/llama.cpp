@@ -75,33 +75,14 @@ static __global__ void ggml_cuda_add_q5_k_hifi_res8_residuals(
     }
 }
 
-// K_LITE compact-copy kernels: strip residual extension, produce base-type blocks for MMQ.
-// All LITE types have base fields at identical byte offsets as the base type.
-// Note: Q3_K = 110 bytes (not 4-aligned), so we use byte-by-byte copy to handle all cases.
-static_assert(sizeof(block_q2_K)         % sizeof(uint32_t) == 0, "Q2_K size not a multiple of 4");
-static_assert(sizeof(block_q2_k_lite)   % sizeof(uint32_t) == 0, "Q2_K_LITE size not a multiple of 4");
-static_assert(sizeof(block_q3_k_lite)   % sizeof(uint32_t) == 0, "Q3_K_LITE size not a multiple of 4");
-static_assert(sizeof(block_q4_K)         % sizeof(uint32_t) == 0, "Q4_K size not a multiple of 4");
-static_assert(sizeof(block_q4_k_lite)   % sizeof(uint32_t) == 0, "Q4_K_LITE size not a multiple of 4");
-static_assert(sizeof(block_q5_k_lite)   % sizeof(uint32_t) == 0, "Q5_K_LITE size not a multiple of 4");
-static_assert(sizeof(block_q6_k_lite)   % sizeof(uint32_t) == 0, "Q6_K_LITE size not a multiple of 4");
-
-#define DEFINE_COMPACT_LITE_KERNEL(TNAME, LITE_T, BASE_T) \
-static __global__ void ggml_cuda_compact_##TNAME##_to_base( \
-    const void * __restrict__ src, void * __restrict__ dst, int64_t n_blocks) { \
-    const int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x; \
-    if (i >= n_blocks) return; \
-    const uint8_t * s = (const uint8_t *)((const char *)src + i * sizeof(LITE_T)); \
-    uint8_t       * d = (uint8_t       *)((char       *)dst + i * sizeof(BASE_T)); \
-    _Pragma("unroll") \
-    for (int j = 0; j < (int)sizeof(BASE_T); ++j) { d[j] = s[j]; } \
-}
-
-DEFINE_COMPACT_LITE_KERNEL(Q2_K_LITE, block_q2_k_lite, block_q2_K)
-DEFINE_COMPACT_LITE_KERNEL(Q3_K_LITE, block_q3_k_lite, block_q2_K)  // Q3_K_LITE base = Q2_K
-DEFINE_COMPACT_LITE_KERNEL(Q4_K_LITE, block_q4_k_lite, block_q3_K)  // Q4_K_LITE base = Q3_K (110 bytes)
-DEFINE_COMPACT_LITE_KERNEL(Q5_K_LITE, block_q5_k_lite, block_q4_K)  // Q5_K_LITE base = Q4_K
-DEFINE_COMPACT_LITE_KERNEL(Q6_K_LITE, block_q6_k_lite, block_q5_K)  // Q6_K_LITE base = Q5_K
+// Verify LITE block sizes are 4-byte aligned (required for safe pointer casting in load_tiles).
+static_assert(sizeof(block_q2_K)        % sizeof(uint32_t) == 0, "Q2_K size not a multiple of 4");
+static_assert(sizeof(block_q2_k_lite)  % sizeof(uint32_t) == 0, "Q2_K_LITE size not a multiple of 4");
+static_assert(sizeof(block_q3_k_lite)  % sizeof(uint32_t) == 0, "Q3_K_LITE size not a multiple of 4");
+static_assert(sizeof(block_q4_K)        % sizeof(uint32_t) == 0, "Q4_K size not a multiple of 4");
+static_assert(sizeof(block_q4_k_lite)  % sizeof(uint32_t) == 0, "Q4_K_LITE size not a multiple of 4");
+static_assert(sizeof(block_q5_k_lite)  % sizeof(uint32_t) == 0, "Q5_K_LITE size not a multiple of 4");
+static_assert(sizeof(block_q6_k_lite)  % sizeof(uint32_t) == 0, "Q6_K_LITE size not a multiple of 4");
 
 // Generic LITE residual correction kernel.
 // LITE residual_scale = max_err / 127.0f (pre-divided), so correction = rscale * residual_vals[k].
