@@ -43,9 +43,23 @@ No extra requirements but it will depend on your hardware configuration.
 
 ## Build steps
 
+## Source project
+
+Clone the original llama.cpp project. This project is constantly updated, so you probably want the latest updates.
+
+Then complete these steps:
+
+- delete the CONTRIBUTORS.md file
+- delete the AGENTS.md file
+- delete the CLAUDE.md file
+
+Then apply the HIFI changes, with a Claude command like this:
+
+_Please implement the HIFI and LITE models as described in the @HIFI_IMPLEMENTATION_GUIDE.md_
+
 ### Base image
 
-First, you'll need the base image that you'll be building this off. **REPLACE `0.6B` WITH THE VERSION YOU WANT**
+First, you'll need the base image that you'll be building this off. **REPLACE `0.8B` WITH THE VERSION YOU WANT**
 
 Windows:
 ```powershell
@@ -105,15 +119,16 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DGGML_AVX=ON -DGGML_
 Beelink:
 ```bash
 mkdir build
-  cd build
-  export ROCM_PATH=/opt/rocm
-  cmake .. \
-      -DGGML_HIP=ON \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_PREFIX_PATH=/opt/rocm/lib/cmake \
-      -DAMDGPU_TARGETS=gfx1151
-  make -j$(nproc)
-  ```
+cd build
+export ROCM_PATH=/opt/rocm
+cmake .. \
+    -DGGML_HIP=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH=/opt/rocm/lib/cmake \
+    -DAMDGPU_TARGETS=gfx1151
+make -j$(nproc)
+cd ..
+```
 
 ### Create an imatrix file
 
