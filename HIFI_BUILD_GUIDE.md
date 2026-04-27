@@ -57,20 +57,22 @@ Then apply the HIFI changes, with a Claude command like this:
 
 _Please implement the HIFI and LITE models as described in the @HIFI_IMPLEMENTATION_GUIDE.md_
 
+This has been tested with:
+- Claude
 ### Base image
 
 First, you'll need the base image that you'll be building this off. **REPLACE `0.8B` WITH THE VERSION YOU WANT**
 
 Windows:
 ```powershell
-hf download Qwen/Qwen3-0.6B --local-dir ./Qwen3-0.6B
-python .\convert_hf_to_gguf.py .\Qwen3-0.6B\ --outfile .\Qwen3-0.6B-f16.gguf --outtype f16
+hf download Qwen/Qwen3.5-0.8B --local-dir ./Qwen3.5-0.8B
+python .\convert_hf_to_gguf.py .\Qwen3.5-0.8B\ --outfile .\Qwen3.5-0.8B-f16.gguf --outtype f16
 ```
 
 Linux & MacOS:
 ```bash
-hf download Qwen/Qwen3-0.6B --local-dir ./Qwen3-0.6B
-python3 ./convert_hf_to_gguf.py ./Qwen3-0.6B/ --outfile ./Qwen3-0.6B-f16.gguf --outtype f16
+hf download Qwen/Qwen3.5-0.8B --local-dir ./Qwen3.5-0.8B
+python3 ./convert_hf_to_gguf.py ./Qwen3.5-0.8B/ --outfile ./Qwen3.5-0.8B-f16.gguf --outtype f16
 ```
 
 ### Wikitext
