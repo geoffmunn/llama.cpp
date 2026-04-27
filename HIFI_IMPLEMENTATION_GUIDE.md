@@ -146,7 +146,8 @@ typedef struct {
     uint8_t  q3_k_data[110];                  // standard Q3_K block (outlier positions zeroed)
     uint8_t  outlier_idx[Q3_K_HIFI_OUTLIERS]; // 8 indices (0–255), sorted ascending
     ggml_half outliers[Q3_K_HIFI_OUTLIERS];   // 8 FP16 replacement values
-    uint8_t  padding[2];                      // alignment to 136 bytes
+    uint8_t  outlier_count;                   // actual number of outliers stored (0–8)
+    uint8_t  _pad;                            // reserved; keep 136-byte total
 } block_q3_k_hifi;
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(pop)
@@ -614,6 +615,8 @@ size_t quantize_q2_k_lite(const float * src, void * dst, int64_t nrows,
    – base block bytes (144 bytes for Q4_K)
    – outlier_idx[N]: positions sorted ascending
    – outlier FP16 values: ggml_half(x[outlier_idx[i]])
+   – outlier_count = N  (use the `outlier_count` field; Q3_K_HIFI has this explicitly;
+     other FP16 types that have a fixed count may omit the field)
 ```
 
 #### INT8 Residual Correction (e.g. Q6_K_HIFI_RES8)
@@ -1391,20 +1394,38 @@ in `ggml-vulkan/CMakeLists.txt` or equivalent.
    matches 196. The `GGML_QUANT_SIZES` Python entry is also 196 (corrected during the
    2025 port). Any legacy source that shows 200 bytes is stale and wrong.
 
-7. **Q3_K_HIFI is disabled for ≤1.7B models.** The function `get_q3_hifi_attn_v_threshold`
-   returns 0 for these, meaning no attn_v layers are enhanced. For output/embedding tensors
-   on tiny models Q3_K_M base behavior is matched.
+7. **Q3_K_HIFI outlier count by model size.** `ggml_q3_hifi_get_max_outliers` returns:
+   - **TINY (≤1.7B): 2** — small models have near-uniform weight distributions; zeroing
+     more positions disrupts sub-group scales more than the FP16 restoration recovers.
+     Empirically, 4+ outliers per block produces *worse* perplexity than plain Q3_K_M for
+     sub-2B models. 2 is the minimum that preserves net benefit.
+   - **MEDIUM (2B–8B): 8** — the sweet spot where genuine outliers exist.
+   - **LARGE (14B+): 6** — outliers are rarer per-block at very large scale.
+   The attn_v enhancement (`get_q3_hifi_attn_v_threshold`) is additionally disabled for
+   ≤1.7B models, so those layers fall back to Q3_K_M behavior entirely.
 
-8. **LITE base types.** Q3_K_LITE uses a **Q2_K** base block, Q4_K_LITE uses Q3_K, etc.
-   (one tier lower). The LITE-type quantizer must call the N-1 tier base quantizer.
+8. **`block_q3_k_hifi` has an explicit `outlier_count` field** (stored in what was formerly
+   `padding[0]`). The dequant loop must use this count — do NOT use a zero-index heuristic
+   to detect the end of valid outliers. The correct pattern is:
+   ```c
+   int nc = (int)x[i].outlier_count;
+   if (nc < 0 || nc > Q3_K_HIFI_MAX_OUTLIERS) nc = Q3_K_HIFI_MAX_OUTLIERS;
+   for (int j = 0; j < nc; j++)
+       tmp[x[i].outlier_idx[j]] = GGML_FP16_TO_FP32(x[i].outliers[j]);
+   ```
+   Other FP16 types (Q4_K_HIFI, Q2_K_HIFI) have a fixed max count and store all slots,
+   so they do not need a separate count field.
 
-9. **GGUF metadata.** `llama-quant.cpp` writes `general.quantization_type` as a string
-   ("Q4_K_HIFI", "Q5_K_HIFI") for HIFI ftypes.
+10. **LITE base types.** Q3_K_LITE uses a **Q2_K** base block, Q4_K_LITE uses Q3_K, etc.
+    (one tier lower). The LITE-type quantizer must call the N-1 tier base quantizer.
 
-10. **Environment variable debug hook.** Set `Q3_K_HIFI_DEBUG=1` to log Q3_K_HIFI tensor
+11. **GGUF metadata.** `llama-quant.cpp` writes `general.quantization_type` as a string
+    ("Q4_K_HIFI", "Q5_K_HIFI") for HIFI ftypes.
+
+12. **Environment variable debug hook.** Set `Q3_K_HIFI_DEBUG=1` to log Q3_K_HIFI tensor
     counts at model load time (in `llama-model-loader.cpp`).
 
-11. **Double-promotion in C helper files.** When writing accumulation loops in C with
+13. **Double-promotion in C helper files.** When writing accumulation loops in C with
     `-Wdouble-promotion` enabled, a bare `float` operand in mixed arithmetic is silently
     promoted to `double`. Always cast explicitly:
     ```c

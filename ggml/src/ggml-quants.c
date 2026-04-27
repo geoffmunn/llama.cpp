@@ -5668,7 +5668,8 @@ void quantize_row_q3_k_hifi_ref(const float * x, block_q3_k_hifi * y, int64_t k)
             memset(y[i].outlier_idx + n_outliers, 0, Q3_K_HIFI_MAX_OUTLIERS - n_outliers);
             memset(y[i].outliers + n_outliers, 0, (Q3_K_HIFI_MAX_OUTLIERS - n_outliers) * sizeof(ggml_half));
         }
-        y[i].padding[0] = y[i].padding[1] = 0;
+        y[i].outlier_count = (uint8_t)n_outliers;
+        y[i]._pad = 0;
     }
 }
 
@@ -5682,14 +5683,11 @@ void dequantize_row_q3_k_hifi(const block_q3_k_hifi * x, float * y, int64_t k) {
         const block_q3_K * base = (const block_q3_K *)x[i].q3_k_data;
         dequantize_row_q3_K(base, tmp, QK_K);
 
-        // Replace outlier positions
-        for (int j = 0; j < Q3_K_HIFI_MAX_OUTLIERS; j++) {
-            if (x[i].outlier_idx[j] == 0 && j > 0 && x[i].outlier_idx[j-1] >= x[i].outlier_idx[j])
-                break;
-            uint8_t idx = x[i].outlier_idx[j];
-            float val = GGML_FP16_TO_FP32(x[i].outliers[j]);
-            if (val != 0.0f || idx != 0 || j == 0)
-                tmp[idx] = val;
+        // Replace outlier positions with stored FP16 values
+        int nc = (int)x[i].outlier_count;
+        if (nc < 0 || nc > Q3_K_HIFI_MAX_OUTLIERS) nc = Q3_K_HIFI_MAX_OUTLIERS;
+        for (int j = 0; j < nc; j++) {
+            tmp[x[i].outlier_idx[j]] = GGML_FP16_TO_FP32(x[i].outliers[j]);
         }
 
         memcpy(y + i * QK_K, tmp, QK_K * sizeof(float));
