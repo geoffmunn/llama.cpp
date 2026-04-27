@@ -5554,7 +5554,7 @@ static void select_fp16_outliers(const float * x, int n, int n_outliers,
         }
     }
 
-    for (int i = 0; i < found; i++) {
+    for (int i = 0; i < found && i < n_outliers; i++) {
         out_idx[i]  = (uint8_t)best[i];
         out_vals[i] = GGML_FP32_TO_FP16(x[best[i]]);
     }

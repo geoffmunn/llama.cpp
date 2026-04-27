@@ -1393,8 +1393,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 ggml_hifi_quant_context hifi_ctx = {};
                 const ggml_hifi_quant_context * hifi_ctx_ptr = nullptr;
                 {
-                    const float model_params_b = compute_model_params_b(qs->model.hparams,
-                                                                          (int64_t)qs->model.vocab.n_tokens());
+                    const float model_params_b = compute_model_params_b(qs.model.hparams,
+                                                                          (int64_t)qs.model.vocab.n_tokens());
                     const llama_ftype ftype_cur = params->ftype;
 
                     if (new_type == GGML_TYPE_Q3_K_HIFI && ftype_cur == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
@@ -1404,7 +1404,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                             base_outliers = std::min(base_outliers + 2, (int)Q3_K_HIFI_MAX_OUTLIERS);
                         ggml_q3_hifi_set_tensor_outliers(base_outliers);
                         ggml_q3_hifi_set_tensor_importance(tensor_importance);
-                        hifi_ctx = { base_outliers, tensor_importance, -1, (int)qs->model.hparams.n_layer, 1, model_params_b };
+                        hifi_ctx = ggml_hifi_quant_context{ base_outliers, tensor_importance, -1, (int)qs.model.hparams.n_layer, 1, model_params_b };
                         hifi_ctx_ptr = &hifi_ctx;
                     }
                     else if ((new_type == GGML_TYPE_Q6_K_HIFI_RES8 || new_type == GGML_TYPE_Q5_K_HIFI_RES8) &&
@@ -1414,10 +1414,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         float layer_importance = imatrix ? ggml_hifi_compute_tensor_importance(imatrix, n_per_row) : 0.0f;
                         int max_outliers = (new_type == GGML_TYPE_Q5_K_HIFI_RES8)
                                            ? Q5_K_HIFI_RES8_MAX_OUTLIERS : Q6_K_HIFI_RES8_MAX_OUTLIERS;
-                        int n_layers = (int)qs->model.hparams.n_layer;
+                        int n_layers = (int)qs.model.hparams.n_layer;
                         int outlier_count = ggml_hifi_compute_outlier_count(layer_idx, n_layers, layer_importance, model_params_b);
                         outlier_count = std::min(outlier_count, max_outliers);
-                        hifi_ctx = { outlier_count, layer_importance, layer_idx, n_layers, 1, model_params_b };
+                        hifi_ctx = ggml_hifi_quant_context{ outlier_count, layer_importance, layer_idx, n_layers, 1, model_params_b };
                         hifi_ctx_ptr = &hifi_ctx;
                     }
                     else if (new_type == GGML_TYPE_Q4_K_HIFI) {
