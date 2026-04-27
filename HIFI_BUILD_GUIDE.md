@@ -58,7 +58,7 @@ Then apply the HIFI changes, with a Claude command like this:
 _Please implement the HIFI and LITE models as described in the @HIFI_IMPLEMENTATION_GUIDE.md_
 
 This has been tested with:
-- Claude
+- Claude Sonnet 4.6
 ### Base image
 
 First, you'll need the base image that you'll be building this off. **REPLACE `0.8B` WITH THE VERSION YOU WANT**
