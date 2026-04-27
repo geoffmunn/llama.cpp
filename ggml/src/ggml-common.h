@@ -365,6 +365,338 @@ typedef struct {
 } block_q8_K;
 static_assert(sizeof(block_q8_K) == sizeof(float) + QK_K + QK_K/16*sizeof(int16_t), "wrong q8_K block size/padding");
 
+// ---------------------------------------------------------------------------
+// HIFI / LITE custom quantization families
+// ---------------------------------------------------------------------------
+
+// --- HIFI FP16 outlier-replacement variants ---
+
+#define Q3_K_HIFI_BLOCK_SIZE    256
+#define Q3_K_HIFI_OUTLIERS      8
+#define Q3_K_HIFI_INLIERS       248
+#ifndef Q3_K_HIFI_MAX_OUTLIERS
+#define Q3_K_HIFI_MAX_OUTLIERS  8
+#endif
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    uint8_t   q3_k_data[110];                 // standard Q3_K block (outlier positions zeroed)
+    uint8_t   outlier_idx[Q3_K_HIFI_OUTLIERS]; // 8 indices (0-255), sorted ascending
+    ggml_half outliers[Q3_K_HIFI_OUTLIERS];    // 8 FP16 replacement values
+    uint8_t   padding[2];                      // alignment to 136 bytes
+} block_q3_k_hifi;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 110 + 8 + 16 + 2 = 136 bytes
+static_assert(sizeof(block_q3_k_hifi) == 110 + Q3_K_HIFI_OUTLIERS
+              + Q3_K_HIFI_OUTLIERS * sizeof(ggml_half) + 2,
+              "wrong q3_k_hifi block size/padding");
+
+#define Q4_K_HIFI_BLOCK_SIZE    256
+#define Q4_K_HIFI_OUTLIERS      8
+#define Q4_K_HIFI_INLIERS       248
+#ifndef Q4_K_HIFI_MAX_OUTLIERS
+#define Q4_K_HIFI_MAX_OUTLIERS  8
+#endif
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    uint8_t   q4_k_data[144];                  // standard Q4_K block (outlier positions zeroed)
+    uint8_t   outlier_idx[Q4_K_HIFI_OUTLIERS]; // 8 indices (0-255), sorted ascending
+    ggml_half outliers[Q4_K_HIFI_OUTLIERS];    // 8 FP16 replacement values
+} block_q4_k_hifi;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 144 + 8 + 16 = 168 bytes
+static_assert(sizeof(block_q4_k_hifi) == 144 + Q4_K_HIFI_OUTLIERS
+              + Q4_K_HIFI_OUTLIERS * sizeof(ggml_half),
+              "wrong q4_k_hifi block size/padding");
+
+#define Q6_K_HIFI_OUTLIERS 4
+
+typedef struct {
+    // Q6_K-compatible region (210 bytes) -- DO NOT REORDER
+    uint8_t   ql[QK_K/2];      // 128 bytes: quants, lower 4 bits
+    uint8_t   qh[QK_K/4];      //  64 bytes: quants, upper 2 bits
+    int8_t    scales[QK_K/16]; //  16 bytes: scales, 8-bit
+    ggml_half d;               //   2 bytes: super-block scale
+    // Outlier extension (12 bytes)
+    uint8_t   outlier_idx[Q6_K_HIFI_OUTLIERS];   // 4 bytes
+    ggml_half outlier_vals[Q6_K_HIFI_OUTLIERS];  // 8 bytes
+} block_q6_k_hifi;
+// 210 + 12 = 222 bytes
+static_assert(sizeof(block_q6_k_hifi) == sizeof(block_q6_K)
+              + Q6_K_HIFI_OUTLIERS + Q6_K_HIFI_OUTLIERS * sizeof(ggml_half),
+              "wrong q6_k_hifi block size/padding");
+
+#define Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS     8
+#define Q6_K_HIFI_DYNAMIC_MIN_OUTLIERS     2
+#define Q6_K_HIFI_DYNAMIC_DEFAULT_OUTLIERS 6
+#define Q6_K_HIFI_EARLY_EXIT_THRESHOLD     4
+
+typedef struct {
+    // Q6_K-compatible region (210 bytes)
+    uint8_t   ql[QK_K/2];
+    uint8_t   qh[QK_K/4];
+    int8_t    scales[QK_K/16];
+    ggml_half d;
+    // Dynamic outlier extension (26 bytes)
+    uint8_t   outlier_count;                                    // 1: actual count (2-8)
+    uint8_t   outlier_idx[Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS];     // 8 bytes
+    uint8_t   _padding;                                         // 1: align for ggml_half
+    ggml_half outlier_vals[Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS];    // 16 bytes
+} block_q6_k_hifi_dynamic;
+// 210 + 2 + 8 + 16 = 236 bytes
+static_assert(sizeof(block_q6_k_hifi_dynamic) == sizeof(block_q6_K) + 2
+              + Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS
+              + Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS * sizeof(ggml_half),
+              "wrong q6_k_hifi_dynamic block size/padding");
+
+// --- HIFI INT8 residual variants (RES8) ---
+
+#define Q6_K_HIFI_RES8_MAX_OUTLIERS 8
+#define Q6_K_HIFI_RES8_BLOCK_SIZE   232
+
+typedef struct {
+    // Q6_K-compatible region (210 bytes)
+    uint8_t   ql[QK_K/2];
+    uint8_t   qh[QK_K/4];
+    int8_t    scales[QK_K/16];
+    ggml_half d;
+    // INT8 residual extension (22 bytes)
+    uint8_t outlier_count;                              // 1: actual count (1-8)
+    uint8_t outlier_idx[Q6_K_HIFI_RES8_MAX_OUTLIERS];  // 8: positions (0-255)
+    int8_t  residual_vals[Q6_K_HIFI_RES8_MAX_OUTLIERS];// 8: INT8 corrections
+    uint8_t _padding;                                   // 1: float alignment
+    float   residual_scale;                             // 4: shared scale
+} block_q6_k_hifi_res8;
+// 210 + 22 = 232 bytes
+static_assert(sizeof(block_q6_k_hifi_res8) == 232,
+              "wrong q6_k_hifi_res8 block size/padding");
+
+#define Q5_K_HIFI_RES8_MAX_OUTLIERS 8
+#define Q5_K_HIFI_RES8_BLOCK_SIZE   196
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q5_K-compatible region (176 bytes)
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    uint8_t scales[K_SCALE_SIZE]; // 12 bytes
+    uint8_t qh[QK_K/8];           // 32 bytes: high bit
+    uint8_t qs[QK_K/2];           // 128 bytes: low 4 bits
+    // Compact INT8 residual extension (20 bytes)
+    uint8_t outlier_count;                                // 1: actual count (0-8)
+    uint8_t outlier_idx[Q5_K_HIFI_RES8_MAX_OUTLIERS];    // 8: positions
+    int8_t  residual_vals[Q5_K_HIFI_RES8_MAX_OUTLIERS];  // 8: INT8 corrections
+    uint8_t residual_scale_e4m3;                          // 1: E4M3 FP8 scale
+} block_q5_k_hifi_res8;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 176 + 20 = 196 bytes
+static_assert(sizeof(block_q5_k_hifi_res8) == 196,
+              "wrong q5_k_hifi_res8 block size/padding");
+
+#define Q3_K_HIFI_RES8_OUTLIERS 8
+
+typedef struct {
+    // Q3_K-compatible region (110 bytes) -- DO NOT REORDER
+    uint8_t   hmask[QK_K/8];  // 32 bytes
+    uint8_t   qs[QK_K/4];     // 64 bytes
+    uint8_t   scales[12];     // 12 bytes
+    ggml_half d;              //  2 bytes
+    // INT8 residual extension (22 bytes)
+    uint8_t outlier_count;                            // 1
+    uint8_t _pad1;                                    // 1 alignment
+    uint8_t outlier_idx[Q3_K_HIFI_RES8_OUTLIERS];    // 8
+    int8_t  residual_vals[Q3_K_HIFI_RES8_OUTLIERS];  // 8
+    float   residual_scale;                           // 4
+} block_q3_k_hifi_res8;
+// 110 + 22 = 132 bytes
+static_assert(sizeof(block_q3_k_hifi_res8)
+              == sizeof(block_q3_K) + 2
+              + Q3_K_HIFI_RES8_OUTLIERS + Q3_K_HIFI_RES8_OUTLIERS + sizeof(float),
+              "wrong q3_k_hifi_res8 block size/padding");
+
+#define Q2_K_HIFI_BLOCK_SIZE          256
+#define Q2_K_HIFI_MAX_OUTLIERS        3
+#define Q2_K_HIFI_RESIDUAL_MODE_FLAG  0x80
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q2_K-compatible region (84 bytes) -- DO NOT REORDER
+    uint8_t scales[QK_K/16];  // 16 bytes
+    uint8_t qs[QK_K/4];       // 64 bytes
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    // FP16 outlier extension (12 bytes)
+    uint8_t   outlier_count;                        // 1: actual count (0-3)
+    uint8_t   outlier_idx[Q2_K_HIFI_MAX_OUTLIERS];  // 3: positions (0-255)
+    ggml_half outlier_vals[Q2_K_HIFI_MAX_OUTLIERS]; // 6: FP16 replacement values
+    uint8_t   _pad[2];                              // 2: align to 96 bytes
+} block_q2_k_hifi;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 84 + 12 = 96 bytes
+static_assert(sizeof(block_q2_k_hifi) == 96,
+              "wrong q2_k_hifi block size/padding");
+
+// --- LITE family: INT8 residual on one-tier-lower base ---
+
+#define Q2_K_LITE_BLOCK_SIZE    256
+#define Q2_K_LITE_MAX_RESIDUALS 4
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q2_K base (84 bytes)
+    uint8_t scales[QK_K/16];
+    uint8_t qs[QK_K/4];
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    // INT8 extension (12 bytes)
+    uint8_t   residual_count;
+    uint8_t   residual_idx[Q2_K_LITE_MAX_RESIDUALS];  // 4 bytes
+    int8_t    residual_vals[Q2_K_LITE_MAX_RESIDUALS]; // 4 bytes
+    uint8_t   _pad;
+    ggml_half residual_scale;                          // 2 bytes
+} block_q2_k_lite;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 84 + 12 = 96 bytes
+static_assert(sizeof(block_q2_k_lite) == 96, "wrong q2_k_lite block size/padding");
+
+#define Q3_K_LITE_BLOCK_SIZE    256
+#define Q3_K_LITE_MAX_RESIDUALS 8
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q2_K base (84 bytes)
+    uint8_t scales[QK_K/16];
+    uint8_t qs[QK_K/4];
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    // INT8 extension (20 bytes)
+    uint8_t   residual_count;
+    uint8_t   residual_idx[Q3_K_LITE_MAX_RESIDUALS];  // 8 bytes
+    int8_t    residual_vals[Q3_K_LITE_MAX_RESIDUALS]; // 8 bytes
+    uint8_t   _pad;
+    ggml_half residual_scale;                          // 2 bytes
+} block_q3_k_lite;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 84 + 20 = 104 bytes
+static_assert(sizeof(block_q3_k_lite) == 104, "wrong q3_k_lite block size/padding");
+
+#define Q4_K_LITE_BLOCK_SIZE    256
+#define Q4_K_LITE_MAX_RESIDUALS 7
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q3_K base (110 bytes): hmask[32] + qs[64] + scales[12] + d[2]
+    uint8_t   hmask[QK_K/8];
+    uint8_t   qs[QK_K/4];
+    uint8_t   scales[K_SCALE_SIZE];
+    ggml_half d;
+    // INT8 extension (18 bytes)
+    uint8_t   residual_count;
+    uint8_t   residual_idx[Q4_K_LITE_MAX_RESIDUALS];  // 7 bytes
+    int8_t    residual_vals[Q4_K_LITE_MAX_RESIDUALS]; // 7 bytes
+    uint8_t   _pad;
+    ggml_half residual_scale;                          // 2 bytes
+} block_q4_k_lite;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 110 + 18 = 128 bytes
+static_assert(sizeof(block_q4_k_lite) == 128, "wrong q4_k_lite block size/padding");
+
+#define Q5_K_LITE_BLOCK_SIZE    256
+#define Q5_K_LITE_MAX_RESIDUALS 8
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q4_K base (144 bytes): dm[4] + scales[12] + qs[128]
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    uint8_t scales[3*QK_K/64];
+    uint8_t qs[QK_K/2];
+    // INT8 extension (20 bytes)
+    uint8_t   residual_count;
+    uint8_t   residual_idx[Q5_K_LITE_MAX_RESIDUALS];  // 8 bytes
+    int8_t    residual_vals[Q5_K_LITE_MAX_RESIDUALS]; // 8 bytes
+    uint8_t   _pad;
+    ggml_half residual_scale;
+} block_q5_k_lite;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 144 + 20 = 164 bytes
+static_assert(sizeof(block_q5_k_lite) == 164, "wrong q5_k_lite block size/padding");
+
+#define Q6_K_LITE_BLOCK_SIZE    256
+#define Q6_K_LITE_MAX_RESIDUALS 8
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q5_K base (176 bytes): dm[4] + scales[12] + qh[32] + qs[128]
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    uint8_t scales[3*QK_K/64];
+    uint8_t qh[QK_K/8];
+    uint8_t qs[QK_K/2];
+    // INT8 extension (20 bytes)
+    uint8_t   residual_count;
+    uint8_t   residual_idx[Q6_K_LITE_MAX_RESIDUALS];  // 8 bytes
+    int8_t    residual_vals[Q6_K_LITE_MAX_RESIDUALS]; // 8 bytes
+    uint8_t   _pad;
+    ggml_half residual_scale;
+} block_q6_k_lite;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 176 + 20 = 196 bytes
+static_assert(sizeof(block_q6_k_lite) == 196, "wrong q6_k_lite block size/padding");
+
+// ---------------------------------------------------------------------------
+// End HIFI / LITE structs
+// ---------------------------------------------------------------------------
+
 // (Almost) "true" 2-bit quantization.
 // Due to the need to use blocks as per ggml design, it ends up using
 // 2.0625 bpw because of the 16-bit scale for each block of 256.

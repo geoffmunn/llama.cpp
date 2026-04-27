@@ -320,6 +320,85 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
 #endif
     },
+    // HIFI / LITE CPU type traits
+    [GGML_TYPE_Q3_K_HIFI] = {
+        .from_float               = quantize_row_q3_k_hifi_cpu,
+        .vec_dot                  = ggml_vec_dot_q3_k_hifi_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q4_K_HIFI] = {
+        .from_float               = quantize_row_q4_k_hifi_cpu,
+        .vec_dot                  = ggml_vec_dot_q4_k_hifi_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q6_K_HIFI] = {
+        .from_float               = quantize_row_q6_k_hifi_cpu,
+        .vec_dot                  = ggml_vec_dot_q6_k_hifi_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q6_K_HIFI_DYNAMIC] = {
+        .from_float               = quantize_row_q6_k_hifi_dynamic_cpu,
+        .vec_dot                  = ggml_vec_dot_q6_k_hifi_dynamic_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q6_K_HIFI_RES8] = {
+        .from_float               = quantize_row_q6_k_hifi_res8_cpu,
+        .vec_dot                  = ggml_vec_dot_q6_k_hifi_res8_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q5_K_HIFI_RES8] = {
+        .from_float               = quantize_row_q5_k_hifi_res8_cpu,
+        .vec_dot                  = ggml_vec_dot_q5_k_hifi_res8_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q3_K_HIFI_RES8] = {
+        .from_float               = quantize_row_q3_k_hifi_res8_cpu,
+        .vec_dot                  = ggml_vec_dot_q3_k_hifi_res8_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q2_K_HIFI] = {
+        .from_float               = quantize_row_q2_k_hifi_cpu,
+        .vec_dot                  = ggml_vec_dot_q2_k_hifi_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q2_K_LITE] = {
+        .from_float               = quantize_row_q2_k_lite_cpu,
+        .vec_dot                  = ggml_vec_dot_q2_k_lite_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q3_K_LITE] = {
+        .from_float               = quantize_row_q3_k_lite_cpu,
+        .vec_dot                  = ggml_vec_dot_q3_k_lite_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q4_K_LITE] = {
+        .from_float               = quantize_row_q4_k_lite_cpu,
+        .vec_dot                  = ggml_vec_dot_q4_k_lite_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q5_K_LITE] = {
+        .from_float               = quantize_row_q5_k_lite_cpu,
+        .vec_dot                  = ggml_vec_dot_q5_k_lite_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q6_K_LITE] = {
+        .from_float               = quantize_row_q6_k_lite_cpu,
+        .vec_dot                  = ggml_vec_dot_q6_k_lite_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_IQ2_XXS] = {
         .from_float               = NULL,
         .vec_dot                  = ggml_vec_dot_iq2_xxs_q8_K,

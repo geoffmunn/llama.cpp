@@ -1286,3 +1286,55 @@ void quantize_row_iq4_xs(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
     assert(k % QK_K == 0);
     quantize_iq4_xs(x, y, 1, k, NULL);
 }
+
+// ============================ HIFI / LITE CPU wrappers and vec_dot
+
+#define HIFI_VEC_DOT_Q8K(fname, block_t, deq_fn) \
+void fname(int n, float * GGML_RESTRICT s, size_t bs, \
+           const void * GGML_RESTRICT vx, size_t bx, \
+           const void * GGML_RESTRICT vy, size_t by, int nrc) { \
+    (void)bs; (void)bx; (void)by; (void)nrc; \
+    assert(n % QK_K == 0); \
+    const int nb = n / QK_K; \
+    float sumf = 0.0f; \
+    float tmp_x[QK_K]; \
+    float tmp_y[QK_K]; \
+    for (int i = 0; i < nb; i++) { \
+        deq_fn((const block_t *)vx + i, tmp_x, QK_K); \
+        dequantize_row_q8_K((const block_q8_K *)vy + i, tmp_y, QK_K); \
+        for (int j = 0; j < QK_K; j++) sumf += tmp_x[j] * tmp_y[j]; \
+    } \
+    *s = sumf; \
+}
+
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q3_k_hifi_q8_K,         block_q3_k_hifi,         dequantize_row_q3_k_hifi)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q4_k_hifi_q8_K,         block_q4_k_hifi,         dequantize_row_q4_k_hifi)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_q8_K,         block_q6_k_hifi,         dequantize_row_q6_k_hifi)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_dynamic_q8_K, block_q6_k_hifi_dynamic, dequantize_row_q6_k_hifi_dynamic)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q2_k_hifi_q8_K,         block_q2_k_hifi,         dequantize_row_q2_k_hifi)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_res8_q8_K,    block_q6_k_hifi_res8,    dequantize_row_q6_k_hifi_res8)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q5_k_hifi_res8_q8_K,    block_q5_k_hifi_res8,    dequantize_row_q5_k_hifi_res8)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q3_k_hifi_res8_q8_K,    block_q3_k_hifi_res8,    dequantize_row_q3_k_hifi_res8)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q2_k_lite_q8_K,         block_q2_k_lite,         dequantize_row_q2_k_lite)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q3_k_lite_q8_K,         block_q3_k_lite,         dequantize_row_q3_k_lite)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q4_k_lite_q8_K,         block_q4_k_lite,         dequantize_row_q4_k_lite)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q5_k_lite_q8_K,         block_q5_k_lite,         dequantize_row_q5_k_lite)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_lite_q8_K,         block_q6_k_lite,         dequantize_row_q6_k_lite)
+
+// void* wrapper functions (for from_float CPU path)
+#define HIFI_QUANT_WRAPPER(fname, ref_fn, block_t) \
+void fname(const float * x, void * y, int64_t k) { ref_fn(x, (block_t *)y, k); }
+
+HIFI_QUANT_WRAPPER(quantize_row_q3_k_hifi_cpu,         quantize_row_q3_k_hifi_ref,         block_q3_k_hifi)
+HIFI_QUANT_WRAPPER(quantize_row_q4_k_hifi_cpu,         quantize_row_q4_k_hifi_ref,         block_q4_k_hifi)
+HIFI_QUANT_WRAPPER(quantize_row_q6_k_hifi_cpu,         quantize_row_q6_k_hifi_ref,         block_q6_k_hifi)
+HIFI_QUANT_WRAPPER(quantize_row_q6_k_hifi_dynamic_cpu, quantize_row_q6_k_hifi_dynamic_ref, block_q6_k_hifi_dynamic)
+HIFI_QUANT_WRAPPER(quantize_row_q2_k_hifi_cpu,         quantize_row_q2_k_hifi_ref,         block_q2_k_hifi)
+HIFI_QUANT_WRAPPER(quantize_row_q6_k_hifi_res8_cpu,    quantize_row_q6_k_hifi_res8_ref,    block_q6_k_hifi_res8)
+HIFI_QUANT_WRAPPER(quantize_row_q5_k_hifi_res8_cpu,    quantize_row_q5_k_hifi_res8_ref,    block_q5_k_hifi_res8)
+HIFI_QUANT_WRAPPER(quantize_row_q3_k_hifi_res8_cpu,    quantize_row_q3_k_hifi_res8_ref,    block_q3_k_hifi_res8)
+HIFI_QUANT_WRAPPER(quantize_row_q2_k_lite_cpu,         quantize_row_q2_k_lite_ref,         block_q2_k_lite)
+HIFI_QUANT_WRAPPER(quantize_row_q3_k_lite_cpu,         quantize_row_q3_k_lite_ref,         block_q3_k_lite)
+HIFI_QUANT_WRAPPER(quantize_row_q4_k_lite_cpu,         quantize_row_q4_k_lite_ref,         block_q4_k_lite)
+HIFI_QUANT_WRAPPER(quantize_row_q5_k_lite_cpu,         quantize_row_q5_k_lite_ref,         block_q5_k_lite)
+HIFI_QUANT_WRAPPER(quantize_row_q6_k_lite_cpu,         quantize_row_q6_k_lite_ref,         block_q6_k_lite)

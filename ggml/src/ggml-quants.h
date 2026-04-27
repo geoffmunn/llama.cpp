@@ -107,6 +107,78 @@ GGML_API void iq2xs_free_impl(enum ggml_type type);
 GGML_API void iq3xs_init_impl(int grid_size);
 GGML_API void iq3xs_free_impl(int grid_size);
 
+// ---------------------------------------------------------------------------
+// HIFI / LITE quantization function declarations
+// ---------------------------------------------------------------------------
+
+// HIFI FP16-outlier types
+void quantize_row_q3_k_hifi_ref(const float * x, block_q3_k_hifi * y, int64_t k);
+void dequantize_row_q3_k_hifi(const block_q3_k_hifi * x, float * y, int64_t k);
+size_t quantize_q3_k_hifi(const float * src, void * dst, int64_t nrows,
+                           int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q4_k_hifi_ref(const float * x, block_q4_k_hifi * y, int64_t k);
+void dequantize_row_q4_k_hifi(const block_q4_k_hifi * x, float * y, int64_t k);
+size_t quantize_q4_k_hifi(const float * src, void * dst, int64_t nrows,
+                           int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q6_k_hifi_ref(const float * x, block_q6_k_hifi * y, int64_t k);
+void dequantize_row_q6_k_hifi(const block_q6_k_hifi * x, float * y, int64_t k);
+size_t quantize_q6_k_hifi(const float * src, void * dst, int64_t nrows,
+                           int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q6_k_hifi_dynamic_ref(const float * x, block_q6_k_hifi_dynamic * y, int64_t k);
+void dequantize_row_q6_k_hifi_dynamic(const block_q6_k_hifi_dynamic * x, float * y, int64_t k);
+size_t quantize_q6_k_hifi_dynamic(const float * src, void * dst, int64_t nrows,
+                                   int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q2_k_hifi_ref(const float * x, block_q2_k_hifi * y, int64_t k);
+void dequantize_row_q2_k_hifi(const block_q2_k_hifi * x, float * y, int64_t k);
+size_t quantize_q2_k_hifi(const float * src, void * dst, int64_t nrows,
+                           int64_t n_per_row, const float * imatrix);
+
+// HIFI INT8-residual types
+void quantize_row_q6_k_hifi_res8_ref(const float * x, block_q6_k_hifi_res8 * y, int64_t k);
+void dequantize_row_q6_k_hifi_res8(const block_q6_k_hifi_res8 * x, float * y, int64_t k);
+size_t quantize_q6_k_hifi_res8(const float * src, void * dst, int64_t nrows,
+                                int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q5_k_hifi_res8_ref(const float * x, block_q5_k_hifi_res8 * y, int64_t k);
+void dequantize_row_q5_k_hifi_res8(const block_q5_k_hifi_res8 * x, float * y, int64_t k);
+size_t quantize_q5_k_hifi_res8(const float * src, void * dst, int64_t nrows,
+                                int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q3_k_hifi_res8_ref(const float * x, block_q3_k_hifi_res8 * y, int64_t k);
+void dequantize_row_q3_k_hifi_res8(const block_q3_k_hifi_res8 * x, float * y, int64_t k);
+size_t quantize_q3_k_hifi_res8(const float * src, void * dst, int64_t nrows,
+                                int64_t n_per_row, const float * imatrix);
+
+// LITE types
+void quantize_row_q2_k_lite_ref(const float * x, block_q2_k_lite * y, int64_t k);
+void dequantize_row_q2_k_lite(const block_q2_k_lite * x, float * y, int64_t k);
+size_t quantize_q2_k_lite(const float * src, void * dst, int64_t nrows,
+                           int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q3_k_lite_ref(const float * x, block_q3_k_lite * y, int64_t k);
+void dequantize_row_q3_k_lite(const block_q3_k_lite * x, float * y, int64_t k);
+size_t quantize_q3_k_lite(const float * src, void * dst, int64_t nrows,
+                           int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q4_k_lite_ref(const float * x, block_q4_k_lite * y, int64_t k);
+void dequantize_row_q4_k_lite(const block_q4_k_lite * x, float * y, int64_t k);
+size_t quantize_q4_k_lite(const float * src, void * dst, int64_t nrows,
+                           int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q5_k_lite_ref(const float * x, block_q5_k_lite * y, int64_t k);
+void dequantize_row_q5_k_lite(const block_q5_k_lite * x, float * y, int64_t k);
+size_t quantize_q5_k_lite(const float * src, void * dst, int64_t nrows,
+                           int64_t n_per_row, const float * imatrix);
+
+void quantize_row_q6_k_lite_ref(const float * x, block_q6_k_lite * y, int64_t k);
+void dequantize_row_q6_k_lite(const block_q6_k_lite * x, float * y, int64_t k);
+size_t quantize_q6_k_lite(const float * src, void * dst, int64_t nrows,
+                           int64_t n_per_row, const float * imatrix);
+
 #ifdef __cplusplus
 }
 #endif
