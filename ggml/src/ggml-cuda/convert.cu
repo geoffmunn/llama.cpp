@@ -525,6 +525,71 @@ static void dequantize_row_q3_K_cuda(const void * vx, dst_t * y, const int64_t k
     dequantize_block_q3_K<<<nb, 64, 0, stream>>>(vx, y);
 }
 
+// Q3_K_HIFI GPU dequantize: block layout (136 bytes, no pack needed — fields are naturally aligned):
+//   [0..109]   q3_k_data  — byte-identical to block_q3_K
+//   [110..117] outlier_idx[8]  — uint8_t indices into [0,255]
+//   [118..133] outliers[8]     — __half FP16 replacement values
+//   [134]      outlier_count   — uint8_t (0..8)
+//   [135]      _pad
+static constexpr int Q3_K_HIFI_GPU_STRIDE    = 136;
+static constexpr int Q3_K_HIFI_GPU_IDX_OFF   = 110;
+static constexpr int Q3_K_HIFI_GPU_VALS_OFF  = 118;
+static constexpr int Q3_K_HIFI_GPU_COUNT_OFF = 134;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i = blockIdx.x;
+    // q3_k_data is at byte offset 0 of the block — byte-compatible with block_q3_K
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q3_K_HIFI_GPU_STRIDE;
+    const block_q3_K * x   = (const block_q3_K *) blk;
+
+    // Identical Q3_K dequantization logic (same as dequantize_block_q3_K)
+    const int64_t r   = threadIdx.x/4;
+    const int64_t tid = r/2;
+    const int64_t is0 = r%2;
+    const int64_t l0  = 16*is0 + 4*(threadIdx.x%4);
+    const int64_t n   = tid / 4;
+    const int64_t j   = tid - 4*n;
+
+    uint8_t m  = 1 << (4*n + j);
+    int64_t is = 8*n + 2*j + is0;
+    int shift  = 2*j;
+
+    int8_t us = is <  4 ? (x->scales[is-0] & 0xF) | (((x->scales[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (x->scales[is-0] & 0xF) | (((x->scales[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (x->scales[is-8] >>  4) | (((x->scales[is+0] >> 4) & 3) << 4) :
+                          (x->scales[is-8] >>  4) | (((x->scales[is-4] >> 6) & 3) << 4);
+    const float d_all = x->d;
+    const float dl    = d_all * (us - 32);
+
+    dst_t            * y  = yy + i*QK_K + 128*n + 32*j;
+    const uint8_t    * q  = x->qs + 32*n;
+    const uint8_t    * hm = x->hmask;
+
+    for (int l = l0; l < l0+4; ++l) {
+        y[l] = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+    }
+
+    // Apply FP16 outlier corrections: thread 0 overwrites the outlier positions
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        const uint8_t * idx_ptr  = blk + Q3_K_HIFI_GPU_IDX_OFF;
+        const __half  * val_ptr  = (const __half *)(blk + Q3_K_HIFI_GPU_VALS_OFF);
+        int nc = (int)(blk[Q3_K_HIFI_GPU_COUNT_OFF]);
+        if (nc < 0 || nc > Q3_K_HIFI_MAX_OUTLIERS) nc = Q3_K_HIFI_MAX_OUTLIERS;
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx_ptr[k]] = (dst_t)__half2float(val_ptr[k]);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_K;
+    dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
+}
+
 template<typename dst_t>
 static void dequantize_row_q4_0_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
     const int nb32 = k / 32;
@@ -730,6 +795,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_q2_K_cuda;
         case GGML_TYPE_Q3_K:
             return dequantize_row_q3_K_cuda;
+        case GGML_TYPE_Q3_K_HIFI:
+            return dequantize_row_q3_k_hifi_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
         case GGML_TYPE_Q5_K:
@@ -785,6 +852,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_q2_K_cuda;
         case GGML_TYPE_Q3_K:
             return dequantize_row_q3_K_cuda;
+        case GGML_TYPE_Q3_K_HIFI:
+            return dequantize_row_q3_k_hifi_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
         case GGML_TYPE_Q5_K:
