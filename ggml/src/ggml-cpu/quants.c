@@ -1307,7 +1307,35 @@ void fname(int n, float * GGML_RESTRICT s, size_t bs, \
     *s = sumf; \
 }
 
-HIFI_VEC_DOT_Q8K(ggml_vec_dot_q3_k_hifi_q8_K,         block_q3_k_hifi,         dequantize_row_q3_k_hifi)
+// Optimized: reuse the existing SIMD q3_K kernel on the embedded block_q3_K,
+// then add a small correction for the ≤8 outlier positions stored in FP16.
+// Outlier weights were zeroed before Q3_K quantization, so the base kernel
+// computes ~0×activation there; the correction restores the exact value.
+void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                                   const void * GGML_RESTRICT vx, size_t bx,
+                                   const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)bs; (void)bx; (void)by; (void)nrc;
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+    const block_q3_k_hifi * bx_hifi = (const block_q3_k_hifi *)vx;
+    const block_q8_K       * by_q8  = (const block_q8_K *)vy;
+    float result = 0.0f;
+    for (int i = 0; i < nb; i++) {
+        float block_dot = 0.0f;
+        ggml_vec_dot_q3_K_q8_K(QK_K, &block_dot, sizeof(float),
+                                bx_hifi[i].q3_k_data, sizeof(block_q3_K),
+                                &by_q8[i], sizeof(block_q8_K), 1);
+        result += block_dot;
+        int nc = (int)bx_hifi[i].outlier_count;
+        if ((unsigned)nc > (unsigned)Q3_K_HIFI_MAX_OUTLIERS) nc = Q3_K_HIFI_MAX_OUTLIERS;
+        const float q8d = by_q8[i].d;
+        for (int j = 0; j < nc; j++) {
+            const int pos = (int)bx_hifi[i].outlier_idx[j];
+            result += GGML_FP16_TO_FP32(bx_hifi[i].outliers[j]) * (q8d * (float)by_q8[i].qs[pos]);
+        }
+    }
+    *s = result;
+}
 HIFI_VEC_DOT_Q8K(ggml_vec_dot_q4_k_hifi_q8_K,         block_q4_k_hifi,         dequantize_row_q4_k_hifi)
 HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_q8_K,         block_q6_k_hifi,         dequantize_row_q6_k_hifi)
 HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_dynamic_q8_K, block_q6_k_hifi_dynamic, dequantize_row_q6_k_hifi_dynamic)
