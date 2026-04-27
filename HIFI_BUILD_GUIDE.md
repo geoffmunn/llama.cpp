@@ -195,20 +195,26 @@ With an imatrix file:
 
 And without:
 ```bash
-./build/bin/llama-quantize ./Qwen3-0.6B-f16.gguf ./Qwen3-0.6B-f16:Q3_K_HIFI.gguf Q3_K_HIFI
+./build/bin/llama-quantize ./Qwen3.5-0.8B-f16.gguf ./Qwen3.5-0.8B-f16:Q3_K_HIFI.gguf Q3_K_HIFI
+```
+
+You can test it with this command:
+
+```bash
+./build/bin/llama-cli -m ./Qwen3.5-0.8B-f16:Q3_K_HIFI.gguf --reasoning off
 ```
 
 ### Perplexity test
 
 **Windows**:
 ```powershell
-.\build\bin\Release\llama-perplexity.exe -m .\Qwen3-0.6B-f16-Q3_HIFI.gguf -f .\wikitext-2-raw\wikitext-2-raw\wiki.test.raw --ppl-stride 0 -c 512
+.\build\bin\Release\llama-perplexity.exe -m .\Qwen3.5-0.8B-f16-Q3_HIFI.gguf -f .\wikitext-2-raw\wikitext-2-raw\wiki.test.raw --ppl-stride 0 -c 512
 ```
 
 **Linux & MacOS**:
 
 ```bash
-./build/bin/llama-perplexity -m ./Qwen3-0.6B-f16\:Q3_K_HIFI.gguf -f ./wikitext-2-raw/wikitext-2-raw/wiki.test.raw --ppl-stride 0 -c 512
+./build/bin/llama-perplexity -m ./Qwen3.5-0.8B-f16\:Q3_K_HIFI.gguf -f ./wikitext-2-raw/wikitext-2-raw/wiki.test.raw --ppl-stride 0 -c 512
 ```
 
 ### Benchmarking
