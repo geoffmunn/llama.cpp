@@ -283,8 +283,9 @@ typedef struct {
     uint8_t outlier_idx[Q5_K_HIFI_RES8_MAX_OUTLIERS];    // 8: positions
     int8_t  residual_vals[Q5_K_HIFI_RES8_MAX_OUTLIERS];  // 8: INT8 corrections
     uint8_t residual_scale_e4m3;                         // 1: E4M3 FP8 scale
+    uint8_t _reserved[2];                                // 2: explicit padding so pack(1) still = 196
 } block_q5_k_hifi_res8;
-// 176 + 20 = 196 bytes
+// 176 + 20 = 196 bytes (1+8+8+1+2 = 20 in extension)
 static_assert(sizeof(block_q5_k_hifi_res8) == 196,
               "wrong q5_k_hifi_res8 block size/padding");
 ```
@@ -464,6 +465,10 @@ These files implement the layer-adaptive quantization context API. Add them to t
 GGML source list in `ggml/src/CMakeLists.txt` alongside the existing `ggml-quants.c`.
 
 **Key API (`ggml-quants-hifi.h`):**
+
+> **Include path pitfall**: `ggml-quants-hifi.h` must use `#include "ggml.h"` (not
+> `#include "ggml/ggml.h"`). Files in `ggml/src/` are built with `ggml/include/` as the
+> root, so `ggml.h` resolves correctly but `ggml/ggml.h` does not exist on that path.
 
 ```c
 // Thread-local context passed into quantization functions
@@ -1021,7 +1026,7 @@ if (new_type == GGML_TYPE_Q3_K_HIFI && ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
     }
     ggml_q3_hifi_set_tensor_outliers(base_outliers);
     ggml_q3_hifi_set_tensor_importance(tensor_importance);
-    hifi_ctx = { base_outliers, tensor_importance, -1, (int)n_layer, 1, model_params_b };
+    hifi_ctx = ggml_hifi_quant_context{ base_outliers, tensor_importance, -1, (int)n_layer, 1, model_params_b };
     hifi_ctx_ptr = &hifi_ctx;
 }
 
@@ -1038,7 +1043,7 @@ if ((new_type == GGML_TYPE_Q6_K_HIFI_RES8 || new_type == GGML_TYPE_Q5_K_HIFI_RES
     int outlier_count = ggml_hifi_compute_outlier_count(layer_idx, n_layers,
                                                          layer_importance, model_params_b);
     outlier_count = std::min(outlier_count, max_outliers);
-    hifi_ctx = { outlier_count, layer_importance, layer_idx, n_layers, 1, model_params_b };
+    hifi_ctx = ggml_hifi_quant_context{ outlier_count, layer_importance, layer_idx, n_layers, 1, model_params_b };
     hifi_ctx_ptr = &hifi_ctx;
 }
 
