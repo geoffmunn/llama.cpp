@@ -500,6 +500,7 @@ typedef struct {
     uint8_t outlier_idx[Q5_K_HIFI_RES8_MAX_OUTLIERS];    // 8: positions
     int8_t  residual_vals[Q5_K_HIFI_RES8_MAX_OUTLIERS];  // 8: INT8 corrections
     uint8_t residual_scale_e4m3;                          // 1: E4M3 FP8 scale
+    uint8_t _reserved[2];                                 // 2: explicit padding (176+20=196)
 } block_q5_k_hifi_res8;
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(pop)

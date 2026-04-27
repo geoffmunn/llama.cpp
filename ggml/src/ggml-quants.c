@@ -5929,8 +5929,8 @@ void quantize_row_q2_k_hifi_ref(const float * x, block_q2_k_hifi * y, int64_t k)
 
         memcpy(y[i].scales, base_block.scales, QK_K/16);
         memcpy(y[i].qs,     base_block.qs,     QK_K/4);
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        y[i].d    = base_block.d;
+        y[i].dmin = base_block.dmin;
 
         y[i].outlier_count = Q2_K_HIFI_MAX_OUTLIERS;
         memcpy(y[i].outlier_idx,  oidx,  Q2_K_HIFI_MAX_OUTLIERS);
@@ -6071,8 +6071,8 @@ void quantize_row_q5_k_hifi_res8_ref(const float * x, block_q5_k_hifi_res8 * y, 
         quantize_row_q5_K_ref(xb, &base_block, QK_K);
 
         // Copy Q5_K base region
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        y[i].d    = base_block.d;
+        y[i].dmin = base_block.dmin;
         memcpy(y[i].scales, base_block.scales, K_SCALE_SIZE);
         memcpy(y[i].qh,     base_block.qh,     QK_K/8);
         memcpy(y[i].qs,     base_block.qs,     QK_K/2);
@@ -6211,8 +6211,8 @@ void quantize_row_q2_k_lite_ref(const float * x, block_q2_k_lite * y, int64_t k)
         const float * xb = x + i * QK_K;
         quantize_row_q2_K_ref(xb, &base_block, QK_K);
 
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        y[i].d    = base_block.d;
+        y[i].dmin = base_block.dmin;
         memcpy(y[i].scales, base_block.scales, QK_K/16);
         memcpy(y[i].qs,     base_block.qs,     QK_K/4);
 
@@ -6273,8 +6273,8 @@ void quantize_row_q3_k_lite_ref(const float * x, block_q3_k_lite * y, int64_t k)
         const float * xb = x + i * QK_K;
         quantize_row_q2_K_ref(xb, &base_block, QK_K);
 
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        y[i].d    = base_block.d;
+        y[i].dmin = base_block.dmin;
         memcpy(y[i].scales, base_block.scales, QK_K/16);
         memcpy(y[i].qs,     base_block.qs,     QK_K/4);
 
@@ -6397,8 +6397,8 @@ void quantize_row_q5_k_lite_ref(const float * x, block_q5_k_lite * y, int64_t k)
         const float * xb = x + i * QK_K;
         quantize_row_q4_K_ref(xb, &base_block, QK_K);
 
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        y[i].d    = base_block.d;
+        y[i].dmin = base_block.dmin;
         memcpy(y[i].scales, base_block.scales, 3*QK_K/64);
         memcpy(y[i].qs,     base_block.qs,     QK_K/2);
 
@@ -6459,8 +6459,8 @@ void quantize_row_q6_k_lite_ref(const float * x, block_q6_k_lite * y, int64_t k)
         const float * xb = x + i * QK_K;
         quantize_row_q5_K_ref(xb, &base_block, QK_K);
 
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = base_block.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        y[i].d    = base_block.d;
+        y[i].dmin = base_block.dmin;
         memcpy(y[i].scales, base_block.scales, 3*QK_K/64);
         memcpy(y[i].qh,     base_block.qh,     QK_K/8);
         memcpy(y[i].qs,     base_block.qs,     QK_K/2);
