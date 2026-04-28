@@ -5702,6 +5702,42 @@ size_t quantize_q3_k_hifi(const float * src, void * dst, int64_t nrows,
     for (int64_t row = 0; row < nrows; row++) {
         quantize_row_q3_k_hifi_ref(src + row * n_per_row, y + row * (n_per_row / QK_K), n_per_row);
     }
+
+    // Outlier utilization diagnostics: shows how much magnitude is captured vs left unused.
+    // The '|' in output separates stored outlier ranks from unused ranks.
+    // If values after '|' are large relative to those before, increase max_outliers for this model size.
+    {
+        int used = ggml_q3_hifi_get_tensor_outliers();
+        if (used <= 0 || used > Q3_K_HIFI_MAX_OUTLIERS) used = Q3_K_HIFI_MAX_OUTLIERS;
+        const int nb_total = (int)(nrows * (n_per_row / QK_K));
+        double rank_sum[Q3_K_HIFI_MAX_OUTLIERS] = {0};
+        for (int64_t row = 0; row < nrows; row++) {
+            const float * xrow = src + row * n_per_row;
+            for (int64_t blk = 0; blk < n_per_row / QK_K; blk++) {
+                const float * xb = xrow + blk * QK_K;
+                // Build top-8 magnitudes sorted descending via insertion
+                float top8[Q3_K_HIFI_MAX_OUTLIERS] = {0};
+                for (int k = 0; k < QK_K; k++) {
+                    float av = fabsf(xb[k]);
+                    int ins = Q3_K_HIFI_MAX_OUTLIERS;
+                    while (ins > 0 && av > top8[ins-1]) ins--;
+                    if (ins < Q3_K_HIFI_MAX_OUTLIERS) {
+                        for (int r = Q3_K_HIFI_MAX_OUTLIERS - 1; r > ins; r--) top8[r] = top8[r-1];
+                        top8[ins] = av;
+                    }
+                }
+                for (int r = 0; r < Q3_K_HIFI_MAX_OUTLIERS; r++) rank_sum[r] += top8[r];
+            }
+        }
+        fprintf(stderr, "Q3_K_HIFI [%d blks, using %d/%d outliers] avg |val| by rank:",
+                nb_total, used, Q3_K_HIFI_MAX_OUTLIERS);
+        for (int r = 0; r < Q3_K_HIFI_MAX_OUTLIERS; r++) {
+            if (r == used) fprintf(stderr, " |");
+            fprintf(stderr, " %.4f", rank_sum[r] / nb_total);
+        }
+        fprintf(stderr, "\n");
+    }
+
     return nrows * (n_per_row / QK_K) * sizeof(block_q3_k_hifi);
 }
 

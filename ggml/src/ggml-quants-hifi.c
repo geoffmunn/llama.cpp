@@ -96,7 +96,7 @@ ggml_q3_hifi_size_category ggml_q3_hifi_get_size_category(float model_params_b) 
 int ggml_q3_hifi_get_max_outliers(float model_params_b) {
     ggml_q3_hifi_size_category cat = ggml_q3_hifi_get_size_category(model_params_b);
     switch (cat) {
-        case Q3_HIFI_SIZE_TINY:   return 2;
+        case Q3_HIFI_SIZE_TINY:   return 4;
         case Q3_HIFI_SIZE_MEDIUM: return Q3_K_HIFI_MAX_OUTLIERS;
         case Q3_HIFI_SIZE_LARGE:  return 6;
     }
