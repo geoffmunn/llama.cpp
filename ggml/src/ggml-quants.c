@@ -5637,7 +5637,9 @@ void quantize_row_q3_k_hifi_ref(const float * x, block_q3_k_hifi * y, int64_t k)
     GGML_ASSERT(k % QK_K == 0);
     const int nb = k / QK_K;
 
-    int n_outliers = ggml_q3_hifi_get_tensor_outliers();
+    // Prefer hifi context (set per-worker-thread) over standalone TLS (main-thread only).
+    const ggml_hifi_quant_context * ctx = ggml_hifi_get_context();
+    int n_outliers = ctx ? ctx->outlier_count : ggml_q3_hifi_get_tensor_outliers();
     if (n_outliers <= 0 || n_outliers > Q3_K_HIFI_MAX_OUTLIERS)
         n_outliers = Q3_K_HIFI_MAX_OUTLIERS;
 
@@ -5707,7 +5709,8 @@ size_t quantize_q3_k_hifi(const float * src, void * dst, int64_t nrows,
     // The '|' in output separates stored outlier ranks from unused ranks.
     // If values after '|' are large relative to those before, increase max_outliers for this model size.
     {
-        int used = ggml_q3_hifi_get_tensor_outliers();
+        const ggml_hifi_quant_context * diag_ctx = ggml_hifi_get_context();
+        int used = diag_ctx ? diag_ctx->outlier_count : ggml_q3_hifi_get_tensor_outliers();
         if (used <= 0 || used > Q3_K_HIFI_MAX_OUTLIERS) used = Q3_K_HIFI_MAX_OUTLIERS;
         const int nb_total = (int)(nrows * (n_per_row / QK_K));
         double rank_sum[Q3_K_HIFI_MAX_OUTLIERS] = {0};
@@ -5729,13 +5732,16 @@ size_t quantize_q3_k_hifi(const float * src, void * dst, int64_t nrows,
                 for (int r = 0; r < Q3_K_HIFI_MAX_OUTLIERS; r++) rank_sum[r] += top8[r];
             }
         }
-        fprintf(stderr, "Q3_K_HIFI [%d blks, using %d/%d outliers] avg |val| by rank:",
+        char diagbuf[256];
+        int off = snprintf(diagbuf, sizeof(diagbuf),
+                "Q3_K_HIFI [%d blks, %d/%d outliers] |val| by rank:",
                 nb_total, used, Q3_K_HIFI_MAX_OUTLIERS);
-        for (int r = 0; r < Q3_K_HIFI_MAX_OUTLIERS; r++) {
-            if (r == used) fprintf(stderr, " |");
-            fprintf(stderr, " %.4f", rank_sum[r] / nb_total);
+        for (int r = 0; r < Q3_K_HIFI_MAX_OUTLIERS && off < (int)sizeof(diagbuf) - 16; r++) {
+            if (r == used) off += snprintf(diagbuf+off, sizeof(diagbuf)-off, " |");
+            off += snprintf(diagbuf+off, sizeof(diagbuf)-off, " %.4f", rank_sum[r] / nb_total);
         }
-        fprintf(stderr, "\n");
+        snprintf(diagbuf+off, sizeof(diagbuf)-off, "\n");
+        fputs(diagbuf, stderr);
     }
 
     return nrows * (n_per_row / QK_K) * sizeof(block_q3_k_hifi);
