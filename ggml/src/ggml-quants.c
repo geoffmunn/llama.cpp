@@ -5729,7 +5729,7 @@ size_t quantize_q3_k_hifi(const float * src, void * dst, int64_t nrows,
                         top8[ins] = av;
                     }
                 }
-                for (int r = 0; r < Q3_K_HIFI_MAX_OUTLIERS; r++) rank_sum[r] += top8[r];
+                for (int r = 0; r < Q3_K_HIFI_MAX_OUTLIERS; r++) rank_sum[r] += (double)top8[r];
             }
         }
         char diagbuf[256];
