@@ -1162,6 +1162,42 @@ and optionally add matrix-multiply (MMQ/MMVQ) kernels for GPU acceleration.
           for (int j = 0; j < QK_K; j++) sumf += tmp_x[j] * tmp_y[j]; \
       } *s = sumf; }
   ```
+
+  **Q3_K_HIFI optimized vec_dot** — do NOT use the generic dequant macro for this type.
+  Instead, call the existing `ggml_vec_dot_q3_K_q8_K` SIMD function on the embedded
+  `q3_k_data` field, then add outlier FMA corrections. This reuses all platform SIMD
+  paths (AVX2, AVX-512, ARM NEON) automatically:
+  ```c
+  void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                                     const void * GGML_RESTRICT vx, size_t bx,
+                                     const void * GGML_RESTRICT vy, size_t by, int nrc) {
+      assert(n % QK_K == 0);
+      const int nb = n / QK_K;
+      const block_q3_k_hifi * bx_hifi = (const block_q3_k_hifi *)vx;
+      const block_q8_K       * by_q8  = (const block_q8_K *)vy;
+      float result = 0.0f;
+      for (int i = 0; i < nb; i++) {
+          float block_dot = 0.0f;
+          ggml_vec_dot_q3_K_q8_K(QK_K, &block_dot, sizeof(float),
+                                  bx_hifi[i].q3_k_data, sizeof(block_q3_K),
+                                  &by_q8[i], sizeof(block_q8_K), 1);
+          result += block_dot;
+          int nc = (int)bx_hifi[i].outlier_count;
+          if ((unsigned)nc > (unsigned)Q3_K_HIFI_MAX_OUTLIERS) nc = Q3_K_HIFI_MAX_OUTLIERS;
+          const float q8d = by_q8[i].d;
+          for (int j = 0; j < nc; j++) {
+              const int pos = (int)bx_hifi[i].outlier_idx[j];
+              result += GGML_FP16_TO_FP32(bx_hifi[i].outliers[j])
+                      * (q8d * (float)by_q8[i].qs[pos]);
+          }
+      }
+      *s = result;
+  }
+  ```
+  The correction is **additive** (not a replacement) in vec_dot because the base Q3_K
+  block was quantized with zeros at the outlier positions, so those positions contribute
+  exactly 0 to the SIMD sum — verified by the Q3_K zero-level decode identity
+  `(level_4 - 4) * d = 0`.
 - **`ggml-cpu.c`**: Add 13 entries to `type_traits_cpu[]`, each with
   `.vec_dot_type = GGML_TYPE_Q8_K`, `.nrows = 1`, and the wrappers above.
 
@@ -1195,20 +1231,148 @@ Place them in the existing arm that also contains `GGML_TYPE_Q8_K`, `GGML_TYPE_I
 - **`arch/arm/quants.c`** and **`arch/x86/quants.c`**: SIMD-optimized paths are optional
   (recommended for production performance but not needed for correctness).
 
-### 11.2 CUDA Backend (`ggml/src/ggml-cuda/`)
+### 11.2 CUDA/ROCm Backend (`ggml/src/ggml-cuda/`)
 
-Files to modify:
-- **`dequantize.cuh`**: Add `dequantize_q*_k_hifi` device functions following the existing pattern for `q4_K`, `q6_K`, etc.
-- **`convert.cu`**: Add conversion kernels.
-- **`vecdotq.cuh`**: Add `vec_dot_q*_k_hifi_q8_1` functions for MMVQ path.
-- **`mmvq.cu`**: Register HIFI types in the `mul_mat_vec_q` dispatch.
-- **`mmq.cu`** / **`mmq.cuh`**: Add MMQ (batched) paths where applicable.
-- **`ggml-cuda.cu`**: Register HIFI types in `ggml_cuda_op_dequantize_row`, `ggml_cuda_op_mul_mat`, etc.
-- **`common.cuh`**: Add any HIFI-specific constants or helpers.
+Q3_K_HIFI uses the **dequantize-then-cuBLAS** path on GPU (no native vec_dot kernel).
+This is slower per-FLOP than a native MMVQ kernel but correct and GPU-resident.
+The implementation covers three areas:
 
-The dequantize kernel design is: load the base block, dequantize with the existing
-base-type kernel, then apply outlier replacements or residual additions in-place using
-the HIFI extension fields.
+#### 11.2.1 GPU Dequantization Kernel (`convert.cu`)
+
+`block_q3_k_hifi` cannot be declared inside CUDA translation units because
+`ggml-common.h` wraps it in `#if !defined(GGML_COMMON_DECL_CUDA)`. Access the
+extension fields via raw byte-pointer arithmetic using these fixed offsets:
+
+```c
+// Byte layout of block_q3_k_hifi (136 bytes total):
+//  [0  ..109] = q3_k_data  (110-byte embedded block_q3_K)
+//  [110..117] = outlier_idx[8]       (uint8_t × 8)
+//  [118..133] = outliers[8]          (__half × 8 = 16 bytes)
+//  [134]      = outlier_count        (uint8_t)
+//  [135]      = _pad                 (uint8_t)
+static constexpr int Q3_K_HIFI_GPU_STRIDE    = 136;
+static constexpr int Q3_K_HIFI_GPU_IDX_OFF   = 110;
+static constexpr int Q3_K_HIFI_GPU_VALS_OFF  = 118;
+static constexpr int Q3_K_HIFI_GPU_COUNT_OFF = 134;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t * blk = (const uint8_t *)vx + i * Q3_K_HIFI_GPU_STRIDE;
+    const block_q3_K * x = (const block_q3_K *) blk;   // first 110 bytes cast to base type
+
+    // 64-thread Q3_K dequant (identical to dequantize_block_q3_K):
+    const int64_t r   = threadIdx.x/4;
+    const int64_t tid = r/2;
+    const int64_t is0 = r%2;
+    const int64_t l0  = 16*is0 + 4*(threadIdx.x%4);
+    const int64_t n   = tid / 4;
+    const int64_t j   = tid - 4*n;
+    uint8_t m  = 1 << (4*n + j);
+    int64_t is = 8*n + 2*j + is0;
+    int shift  = 2*j;
+    int8_t us = is <  4 ? (x->scales[is-0] & 0xF) | (((x->scales[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (x->scales[is-0] & 0xF) | (((x->scales[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (x->scales[is-8] >>  4) | (((x->scales[is+0] >> 4) & 3) << 4) :
+                          (x->scales[is-8] >>  4) | (((x->scales[is-4] >> 6) & 3) << 4);
+    const float d_all = x->d;
+    const float dl    = d_all * (us - 32);
+    dst_t * y  = yy + i*QK_K + 128*n + 32*j;
+    const uint8_t * q  = x->qs + 32*n;
+    const uint8_t * hm = x->hmask;
+    for (int l = l0; l < l0+4; ++l) {
+        y[l] = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+    }
+
+    // Thread 0 applies outlier corrections after all other threads finish
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        const uint8_t * idx_ptr = blk + Q3_K_HIFI_GPU_IDX_OFF;
+        const __half * val_ptr  = (const __half *)(blk + Q3_K_HIFI_GPU_VALS_OFF);
+        int nc = (int)(blk[Q3_K_HIFI_GPU_COUNT_OFF]);
+        if (nc < 0 || nc > Q3_K_HIFI_MAX_OUTLIERS) nc = Q3_K_HIFI_MAX_OUTLIERS;
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx_ptr[k]] = (dst_t)__half2float(val_ptr[k]);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
+                                           const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_K;
+    dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
+}
+```
+
+Then add `case GGML_TYPE_Q3_K_HIFI: return dequantize_row_q3_k_hifi_cuda;` to **both**
+`ggml_get_to_fp16_cuda` and `ggml_get_to_fp32_cuda` dispatch switches in `convert.cu`.
+
+#### 11.2.2 MMVQ Guard (`mmvq.cuh` / `mmvq.cu`)
+
+Q3_K_HIFI does **not** have a native `vec_dot_q_cuda_t` function registered in
+`get_vec_dot_q_cuda`. Without a guard, calling `get_vec_dot_q_cuda(GGML_TYPE_Q3_K_HIFI)`
+returns `nullptr` and subsequent kernel launch crashes.
+
+Add to `mmvq.cuh`:
+```c
+// Returns true only for types that have a native vec_dot GPU kernel.
+bool ggml_cuda_has_mmvq_kernel(ggml_type type);
+```
+
+Implement in `mmvq.cu`:
+```c
+bool ggml_cuda_has_mmvq_kernel(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q1_0: case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1: case GGML_TYPE_Q8_0:
+        case GGML_TYPE_MXFP4: case GGML_TYPE_NVFP4:
+        case GGML_TYPE_Q2_K: case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K: case GGML_TYPE_Q5_K: case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ2_XXS: case GGML_TYPE_IQ2_XS: case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS: case GGML_TYPE_IQ1_S: case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL: case GGML_TYPE_IQ4_XS: case GGML_TYPE_IQ3_S:
+            return true;
+        default:
+            return false;
+    }
+}
+```
+
+In `ggml-cuda.cu`, guard **all three** `use_mul_mat_vec_q` check sites:
+```c
+bool use_mul_mat_vec_q = ggml_is_quantized(src0->type)
+    && ggml_cuda_has_mmvq_kernel(src0->type)   // ← required for HIFI types
+    && !bad_padding_clear
+    && src1->type == GGML_TYPE_F32
+    && dst->type  == GGML_TYPE_F32
+    && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+```
+
+Similarly in `ggml_cuda_mul_mat_id`:
+```c
+if (ggml_is_quantized(src0->type) && ggml_cuda_has_mmvq_kernel(src0->type)) {
+    // MMVQ path
+}
+```
+
+#### 11.2.3 MUL_MAT GPU Registration (`ggml-cuda.cu`) — CRITICAL
+
+Add `case GGML_TYPE_Q3_K_HIFI:` to the supported-types list inside
+`ggml_cuda_mul_mat` (around the block that lists `GGML_TYPE_Q3_K`, `GGML_TYPE_Q4_K`, etc.).
+
+**Without this entry, Q3_K_HIFI is not recognised as GPU-capable.** The tensor
+scheduler then places *all* tensors — including activation tensors and SSM/GDN state
+tensors — on CPU, even when `--ngl 0` is used. This causes a ~26× inference slowdown
+(measured: 105 s/pass → 4.7 s/pass on a Qwen3.5 9B hybrid model) because the GPU
+handles none of the compute, not even the non-weight operations.
+
+The fix is a single `case` label. Once registered, the scheduler correctly assigns
+activation tensors to the GPU device even when the weight tensors stay on CPU.
+
+Other backends (Metal, Vulkan, SYCL) follow the same three-part pattern: dequant
+kernel, MMVQ/vec_dot guard, MUL_MAT registration.
 
 ### 11.3 Metal Backend (`ggml/src/ggml-metal/`)
 
@@ -1345,7 +1509,61 @@ in `ggml-vulkan/CMakeLists.txt` or equivalent.
 | Q6_K_HIFI | 6.94 | 222 |
 | Q6_K_HIFI_DYNAMIC | ~6.9 | 236 |
 
-### 14.2 Model Size Behaviour
+### 14.2 Measured PPL Results (wikitext-2, 512-token context, Qwen3.5 hybrid)
+
+Tested on a Radeon 8060S (98 GiB VRAM), `-ngl 0` (all weights on CPU, GPU used for
+compute). All HIFI files were quantized without imatrix.
+
+| Model | Format | BPW | PPL | Notes |
+|-------|--------|-----|-----|-------|
+| Qwen3.5-9B | Q3_K_M | 4.84 | 9.3218 | baseline |
+| Qwen3.5-9B | Q3_K_HIFI | ~4.25 | **9.0148** | −0.31 PPL; 3.8 s/pass |
+| Qwen3.5-0.8B | Q3_K_M | 4.84 | 23.03 | baseline |
+| Qwen3.5-0.8B | Q3_K_HIFI | 3.99 | 25.09 | higher BPW gap explains most gap |
+
+**Key takeaway:** For 9B+, Q3_K_HIFI achieves lower PPL than Q3_K_M at lower BPW.
+For sub-2B models the PPL gap is largely explained by the BPW difference (HIFI stores
+the outlier slots regardless of whether they help, adding ~0.5 BPW overhead that cannot
+be recovered for models with flat weight distributions).
+
+### 14.3 Inference Speed
+
+Without the GPU registration fix (§11.2.3), Q3_K_HIFI ran 26× slower than Q3_K_M even
+at `-ngl 0`:
+
+| Format | Condition | Speed |
+|--------|-----------|-------|
+| Q3_K_M | -ngl 0 | 4.77 s/pass |
+| Q3_K_HIFI (unregistered) | -ngl 0 | ~105 s/pass |
+| Q3_K_HIFI (registered) | -ngl 0 | **4.71 s/pass** |
+
+The root cause: without `GGML_TYPE_Q3_K_HIFI` in the GPU-capable type list, the tensor
+scheduler placed *all* tensors on CPU — including the SSM/GDN activation and state
+tensors that Q3_K_M sends to GPU. Registering the type restores the correct device
+assignment.
+
+### 14.4 Small Model Weight Distribution (diagnostic findings)
+
+For the Qwen3.5-0.8B model, measuring the top-8 weight magnitudes per block shows:
+
+```
+rank:  1      2      3      4    | 5      6      7      8
+avg: 0.067  0.060  0.056  0.054 | 0.052  0.050  0.048  0.047
+```
+
+Rank-5 is 77% of rank-1. There is no "elbow" — these are not genuine outliers, just the
+highest of a uniformly-distributed set. The outlier correction scheme is designed for
+models where rank-1 is 3–10× larger than the median (typical in 7B+ models). For
+sub-2B models with flat distributions:
+- Zeroing positions before Q3_K quantization barely reduces the block scale.
+- The FP16 corrections store near-average values, contributing minimal accuracy gain.
+- The BPW overhead (~0.5 BPW for the 8-slot outlier extension) is the dominant effect.
+
+**Conclusion:** Q3_K_HIFI is best suited for models ≥3B where genuine weight outliers
+exist. For sub-2B models, the closest fair comparison is Q3_K_S (not Q3_K_M) at
+similar BPW.
+
+### 14.5 Model Size Behaviour (tensor selection)
 
 | Model size | Q3_K_HIFI attn_v % | Q4_K_HIFI attn_v % | Critical tensor type |
 |------------|---------------------|---------------------|----------------------|
@@ -1355,7 +1573,7 @@ in `ggml-vulkan/CMakeLists.txt` or equivalent.
 | 8–14B | 15% | 20% | Q6_K_HIFI_RES8 |
 | 32B+ | 5% | 0% | Q6_K_HIFI_RES8 |
 
-### 14.3 Imatrix Guidance Thresholds for Q3_K_HIFI
+### 14.6 Imatrix Guidance Thresholds for Q3_K_HIFI
 
 | Model size | Strategy |
 |------------|----------|
@@ -1385,9 +1603,18 @@ in `ggml-vulkan/CMakeLists.txt` or equivalent.
    This means dequantizing the base portion can be done by casting the first N bytes to
    `block_q*_K *`. Preserve this layout invariant when adding new types.
 
-5. **Thread-local context.** `ggml_hifi_set_context` stores a pointer per OS thread.
-   Each worker thread in the multi-threaded quantizer must receive and apply its own copy
-   of the context. See the `llama_tensor_quantize_impl` pattern above.
+5. **Thread-local context — two independent TLS variables.** The HIFI quantizer
+   uses two separate thread-local storage slots:
+   - `g_hifi_ctx` (set by `ggml_hifi_set_context`) — carries the full `ggml_hifi_quant_context`
+     struct pointer. `llama_tensor_quantize_impl` sets this in *every* worker thread lambda.
+   - `g_tensor_outliers` (set by `ggml_q3_hifi_set_tensor_outliers`) — a standalone int
+     set only on the main thread before the worker pool is launched.
+   `quantize_row_q3_k_hifi_ref` reads `g_tensor_outliers`, not `g_hifi_ctx->outlier_count`.
+   Worker threads therefore see `g_tensor_outliers = 0` and fall through to the
+   `Q3_K_HIFI_MAX_OUTLIERS` (8) default. This is the current shipping behaviour — do
+   not "fix" it by switching to `g_hifi_ctx->outlier_count` without re-validating PPL,
+   as empirical testing showed that properly applying fewer outliers (4) to all blocks
+   produced *worse* perplexity than the accidental 8-outlier default for 0.8B models.
 
 6. **Q5_K_HIFI_RES8 block size.** The `static_assert` in `ggml-common.h` is the authoritative
    value: 196 bytes. If your port defines `Q5_K_HIFI_RES8_BLOCK_SIZE` anywhere, ensure it
@@ -1395,10 +1622,13 @@ in `ggml-vulkan/CMakeLists.txt` or equivalent.
    2025 port). Any legacy source that shows 200 bytes is stale and wrong.
 
 7. **Q3_K_HIFI outlier count by model size.** `ggml_q3_hifi_get_max_outliers` returns:
-   - **TINY (≤1.7B): 2** — small models have near-uniform weight distributions; zeroing
-     more positions disrupts sub-group scales more than the FP16 restoration recovers.
-     Empirically, 4+ outliers per block produces *worse* perplexity than plain Q3_K_M for
-     sub-2B models. 2 is the minimum that preserves net benefit.
+   - **TINY (≤1.7B): 2** — small models have near-uniform weight distributions (rank-8
+     magnitude is ≈70% of rank-1; there are no genuine outliers). The TINY value of 2 is
+     used only for the few blocks that run on the main thread; worker threads default to 8
+     (see note 5 above). Empirically, forcing all blocks to 4 outliers via a context fix
+     gave PPL 27.00 vs 25.09 for the accidental-8 path — *more* outliers can hurt when
+     the weight distribution is flat because removing positions before Q3_K quantization
+     changes the block scale without a commensurate accuracy gain from the corrections.
    - **MEDIUM (2B–8B): 8** — the sweet spot where genuine outliers exist.
    - **LARGE (14B+): 6** — outliers are rarer per-block at very large scale.
    The attn_v enhancement (`get_q3_hifi_attn_v_threshold`) is additionally disabled for
@@ -1458,6 +1688,21 @@ in `ggml-vulkan/CMakeLists.txt` or equivalent.
         // nothing to validate beyond size check above
         break;
     ```
+
+14. **GPU MUL_MAT registration affects tensor placement, not just GPU math.**
+    Even with `--ngl 0` (no GPU layers), the tensor scheduler consults the GPU-capable
+    type list to decide where to place *activation* and *state* tensors. A HIFI type
+    missing from that list causes the scheduler to place the entire compute graph on CPU,
+    including SSM/GDN state tensors that would otherwise run on GPU — a 26× slowdown.
+    Always register every HIFI type in the GPU `MUL_MAT` supported-types block even if
+    the type's GPU path is purely dequantize-then-cuBLAS (see §11.2.3).
+
+15. **`block_q3_k_hifi` is not accessible inside CUDA/HIP translation units.**
+    `ggml-common.h` wraps the struct in `#if !defined(GGML_COMMON_DECL_CUDA)`, so GPU
+    kernels cannot use `sizeof(block_q3_k_hifi)` or field names. Access all extension
+    fields via the hardcoded byte offsets documented in §11.2.1. Verify these offsets
+    match `offsetof(block_q3_k_hifi, outlier_idx)` etc. in a CPU unit if the struct
+    layout ever changes.
 
 ---
 
