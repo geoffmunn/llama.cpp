@@ -5637,9 +5637,7 @@ void quantize_row_q3_k_hifi_ref(const float * x, block_q3_k_hifi * y, int64_t k)
     GGML_ASSERT(k % QK_K == 0);
     const int nb = k / QK_K;
 
-    // Prefer hifi context (set per-worker-thread) over standalone TLS (main-thread only).
-    const ggml_hifi_quant_context * ctx = ggml_hifi_get_context();
-    int n_outliers = ctx ? ctx->outlier_count : ggml_q3_hifi_get_tensor_outliers();
+    int n_outliers = ggml_q3_hifi_get_tensor_outliers();
     if (n_outliers <= 0 || n_outliers > Q3_K_HIFI_MAX_OUTLIERS)
         n_outliers = Q3_K_HIFI_MAX_OUTLIERS;
 
@@ -5703,45 +5701,6 @@ size_t quantize_q3_k_hifi(const float * src, void * dst, int64_t nrows,
     block_q3_k_hifi * y = (block_q3_k_hifi *)dst;
     for (int64_t row = 0; row < nrows; row++) {
         quantize_row_q3_k_hifi_ref(src + row * n_per_row, y + row * (n_per_row / QK_K), n_per_row);
-    }
-
-    // Outlier utilization diagnostics: shows how much magnitude is captured vs left unused.
-    // The '|' in output separates stored outlier ranks from unused ranks.
-    // If values after '|' are large relative to those before, increase max_outliers for this model size.
-    {
-        const ggml_hifi_quant_context * diag_ctx = ggml_hifi_get_context();
-        int used = diag_ctx ? diag_ctx->outlier_count : ggml_q3_hifi_get_tensor_outliers();
-        if (used <= 0 || used > Q3_K_HIFI_MAX_OUTLIERS) used = Q3_K_HIFI_MAX_OUTLIERS;
-        const int nb_total = (int)(nrows * (n_per_row / QK_K));
-        double rank_sum[Q3_K_HIFI_MAX_OUTLIERS] = {0};
-        for (int64_t row = 0; row < nrows; row++) {
-            const float * xrow = src + row * n_per_row;
-            for (int64_t blk = 0; blk < n_per_row / QK_K; blk++) {
-                const float * xb = xrow + blk * QK_K;
-                // Build top-8 magnitudes sorted descending via insertion
-                float top8[Q3_K_HIFI_MAX_OUTLIERS] = {0};
-                for (int k = 0; k < QK_K; k++) {
-                    float av = fabsf(xb[k]);
-                    int ins = Q3_K_HIFI_MAX_OUTLIERS;
-                    while (ins > 0 && av > top8[ins-1]) ins--;
-                    if (ins < Q3_K_HIFI_MAX_OUTLIERS) {
-                        for (int r = Q3_K_HIFI_MAX_OUTLIERS - 1; r > ins; r--) top8[r] = top8[r-1];
-                        top8[ins] = av;
-                    }
-                }
-                for (int r = 0; r < Q3_K_HIFI_MAX_OUTLIERS; r++) rank_sum[r] += (double)top8[r];
-            }
-        }
-        char diagbuf[256];
-        int off = snprintf(diagbuf, sizeof(diagbuf),
-                "Q3_K_HIFI [%d blks, %d/%d outliers] |val| by rank:",
-                nb_total, used, Q3_K_HIFI_MAX_OUTLIERS);
-        for (int r = 0; r < Q3_K_HIFI_MAX_OUTLIERS && off < (int)sizeof(diagbuf) - 16; r++) {
-            if (r == used) off += snprintf(diagbuf+off, sizeof(diagbuf)-off, " |");
-            off += snprintf(diagbuf+off, sizeof(diagbuf)-off, " %.4f", rank_sum[r] / nb_total);
-        }
-        snprintf(diagbuf+off, sizeof(diagbuf)-off, "\n");
-        fputs(diagbuf, stderr);
     }
 
     return nrows * (n_per_row / QK_K) * sizeof(block_q3_k_hifi);
