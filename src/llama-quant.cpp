@@ -1426,6 +1426,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         if (imatrix && importance > 0.8f)
                             q4_outliers = Q4_K_HIFI_MAX_OUTLIERS;
                         ggml_q3_hifi_set_tensor_outliers(q4_outliers);
+                        hifi_ctx = ggml_hifi_quant_context{ q4_outliers, importance, -1, (int)qs.model.hparams.n_layer, 1, model_params_b };
+                        hifi_ctx_ptr = &hifi_ctx;
                     }
                 }
 
