@@ -5721,6 +5721,8 @@ void quantize_row_q4_k_hifi_ref(const float * x, block_q4_k_hifi * y, int64_t k)
     float tmp[QK_K];
     block_q4_K base_block;
 
+    static int q4_hifi_quant_logged = 0;
+
     for (int i = 0; i < nb; i++) {
         const float * xb = x + i * QK_K;
 
@@ -5740,6 +5742,25 @@ void quantize_row_q4_k_hifi_ref(const float * x, block_q4_k_hifi * y, int64_t k)
             memset(y[i].outlier_idx + n_outliers, 0, Q4_K_HIFI_MAX_OUTLIERS - n_outliers);
             memset(y[i].outliers + n_outliers, 0, (Q4_K_HIFI_MAX_OUTLIERS - n_outliers) * sizeof(ggml_half));
         }
+
+        if (q4_hifi_quant_logged < 2) {
+            q4_hifi_quant_logged++;
+            const block_q4_K * bq = (const block_q4_K *)y[i].q4_k_data;
+            float d_val   = GGML_FP16_TO_FP32(bq->d);
+            float dmin_val = GGML_FP16_TO_FP32(bq->dmin);
+            fprintf(stderr, "[Q4_K_HIFI quant block %d] d=%.6f dmin=%.6f n_outliers=%d\n",
+                    i, d_val, dmin_val, n_outliers);
+            fprintf(stderr, "  outlier_idx[0..3]=%d %d %d %d  vals=%.4f %.4f %.4f %.4f\n",
+                    oidx[0], oidx[1], oidx[2], oidx[3],
+                    GGML_FP16_TO_FP32(ovals[0]), GGML_FP16_TO_FP32(ovals[1]),
+                    GGML_FP16_TO_FP32(ovals[2]), GGML_FP16_TO_FP32(ovals[3]));
+            float deq[QK_K];
+            dequantize_row_q4_k_hifi(&y[i], deq, QK_K);
+            fprintf(stderr, "  roundtrip deq[0..7]: %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n",
+                    deq[0], deq[1], deq[2], deq[3], deq[4], deq[5], deq[6], deq[7]);
+            fprintf(stderr, "  original  x[0..7]:   %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n",
+                    xb[0], xb[1], xb[2], xb[3], xb[4], xb[5], xb[6], xb[7]);
+        }
     }
 }
 
@@ -5747,6 +5768,8 @@ void dequantize_row_q4_k_hifi(const block_q4_k_hifi * x, float * y, int64_t k) {
     GGML_ASSERT(k % QK_K == 0);
     const int nb = k / QK_K;
     float tmp[QK_K];
+
+    static int q4_hifi_deq_logged = 0;
 
     for (int i = 0; i < nb; i++) {
         const block_q4_K * base = (const block_q4_K *)x[i].q4_k_data;
@@ -5758,6 +5781,16 @@ void dequantize_row_q4_k_hifi(const block_q4_k_hifi * x, float * y, int64_t k) {
             tmp[x[i].outlier_idx[j]] = val;
         }
         memcpy(y + i * QK_K, tmp, QK_K * sizeof(float));
+
+        if (q4_hifi_deq_logged < 2) {
+            q4_hifi_deq_logged++;
+            float d_val   = GGML_FP16_TO_FP32(base->d);
+            float dmin_val = GGML_FP16_TO_FP32(base->dmin);
+            fprintf(stderr, "[Q4_K_HIFI deq  block %d] d=%.6f dmin=%.6f y[0..7]=%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n",
+                    i, d_val, dmin_val,
+                    y[i*QK_K+0], y[i*QK_K+1], y[i*QK_K+2], y[i*QK_K+3],
+                    y[i*QK_K+4], y[i*QK_K+5], y[i*QK_K+6], y[i*QK_K+7]);
+        }
     }
 }
 
