@@ -590,6 +590,613 @@ static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y, const int6
     dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
 }
 
+// ======================================================================
+// HIFI / LITE GPU dequantize kernels
+// All follow the same pattern as dequantize_block_q3_k_hifi:
+//   1. Read block bytes at the HIFI stride
+//   2. Cast the base portion to the parent block type
+//   3. Run parent dequant math (same thread layout as parent)
+//   4. __syncthreads(), then thread 0 applies corrections
+// ======================================================================
+
+// Shared E4M3 scale decoder (used by Q5_K_HIFI_RES8)
+static inline __device__ float hifi_decode_e4m3(uint8_t v) {
+    if (v == 0) return 0.0f;
+    const int e = (v >> 3) & 0xF;
+    const int m = v & 0x7;
+    float mantissa = (e == 0) ? ((float)m / 8.0f) : (1.0f + (float)m / 8.0f);
+    int exp = (e == 0) ? -6 : (e - 7);
+    // Build float: 2^exp via bit-cast
+    int exp_bits = exp + 127;
+    if (exp_bits <= 0) return 0.0f;
+    uint32_t f32 = (uint32_t)exp_bits << 23;
+    float scale;
+    __builtin_memcpy(&scale, &f32, 4);
+    return mantissa * scale;
+}
+
+// Q4_K_HIFI: 168 bytes/block — q4_k_data[144] | outlier_idx[8] | outlier_vals[8*fp16]
+// Always Q4_K_HIFI_OUTLIERS (8) FP16 replacements, no count byte.
+static constexpr int Q4_K_HIFI_GPU_STRIDE   = 168;
+static constexpr int Q4_K_HIFI_GPU_IDX_OFF  = 144;
+static constexpr int Q4_K_HIFI_GPU_VALS_OFF = 152;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q4_K_HIFI_GPU_STRIDE;
+    const block_q4_K * x   = (const block_q4_K *) blk;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid/8;
+    const int64_t ir  = tid%8;
+    const int64_t is  = 2*il;
+    dst_t * y = yy + i*QK_K + 64*il + 4*ir;
+
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+    const uint8_t * q = x->qs + 32*il + 4*ir;
+
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc, m1 = dmin * m;
+    get_scale_min_k4(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc, m2 = dmin * m;
+    for (int l = 0; l < 4; ++l) {
+        y[l +  0] = d1 * (q[l] & 0xF) - m1;
+        y[l + 32] = d2 * (q[l] >>  4) - m2;
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        const uint8_t * idx  = blk + Q4_K_HIFI_GPU_IDX_OFF;
+        const __half  * vals = (const __half *)(blk + Q4_K_HIFI_GPU_VALS_OFF);
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < Q4_K_HIFI_OUTLIERS; k++) {
+            out[(int)idx[k]] = (dst_t)__half2float(vals[k]);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q4_k_hifi_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q4_k_hifi<<<k / QK_K, 32, 0, stream>>>(vx, y);
+}
+
+// Q6_K_HIFI: 222 bytes/block — q6_K_data[210] | outlier_idx[4] | outlier_vals[4*fp16]
+// Always Q6_K_HIFI_OUTLIERS (4) FP16 replacements, no count byte.
+static constexpr int Q6_K_HIFI_GPU_STRIDE   = 222;
+static constexpr int Q6_K_HIFI_GPU_IDX_OFF  = 210;
+static constexpr int Q6_K_HIFI_GPU_VALS_OFF = 214;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q6_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q6_K_HIFI_GPU_STRIDE;
+    const block_q6_K * x   = (const block_q6_K *) blk;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t ip  = tid/32;
+    const int64_t il  = tid - 32*ip;
+    const int64_t is  = 8*ip + il/16;
+    dst_t * y = yy + i*QK_K + 128*ip + il;
+
+    const float d = x->d;
+    const uint8_t * ql = x->ql + 64*ip + il;
+    const uint8_t   qh = x->qh[32*ip + il];
+    const int8_t  * sc = x->scales + is;
+
+    y[ 0] = d * sc[0] * ((int8_t)((ql[ 0] & 0xF) | (((qh >> 0) & 3) << 4)) - 32);
+    y[32] = d * sc[2] * ((int8_t)((ql[32] & 0xF) | (((qh >> 2) & 3) << 4)) - 32);
+    y[64] = d * sc[4] * ((int8_t)((ql[ 0]  >> 4) | (((qh >> 4) & 3) << 4)) - 32);
+    y[96] = d * sc[6] * ((int8_t)((ql[32]  >> 4) | (((qh >> 6) & 3) << 4)) - 32);
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        const uint8_t * idx  = blk + Q6_K_HIFI_GPU_IDX_OFF;
+        const __half  * vals = (const __half *)(blk + Q6_K_HIFI_GPU_VALS_OFF);
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < Q6_K_HIFI_OUTLIERS; k++) {
+            out[(int)idx[k]] = (dst_t)__half2float(vals[k]);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q6_k_hifi_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q6_k_hifi<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
+// Q6_K_HIFI_DYNAMIC: 236 bytes/block — q6_K[210] | count[1] | idx[8] | _pad[1] | vals[8*fp16]
+static constexpr int Q6K_HD_GPU_STRIDE    = 236;
+static constexpr int Q6K_HD_GPU_COUNT_OFF = 210;
+static constexpr int Q6K_HD_GPU_IDX_OFF   = 211;
+static constexpr int Q6K_HD_GPU_VALS_OFF  = 220;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q6_k_hifi_dynamic(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q6K_HD_GPU_STRIDE;
+    const block_q6_K * x   = (const block_q6_K *) blk;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t ip  = tid/32, il = tid - 32*ip;
+    const int64_t is  = 8*ip + il/16;
+    dst_t * y = yy + i*QK_K + 128*ip + il;
+
+    const float d = x->d;
+    const uint8_t * ql = x->ql + 64*ip + il;
+    const uint8_t   qh = x->qh[32*ip + il];
+    const int8_t  * sc = x->scales + is;
+
+    y[ 0] = d * sc[0] * ((int8_t)((ql[ 0] & 0xF) | (((qh >> 0) & 3) << 4)) - 32);
+    y[32] = d * sc[2] * ((int8_t)((ql[32] & 0xF) | (((qh >> 2) & 3) << 4)) - 32);
+    y[64] = d * sc[4] * ((int8_t)((ql[ 0]  >> 4) | (((qh >> 4) & 3) << 4)) - 32);
+    y[96] = d * sc[6] * ((int8_t)((ql[32]  >> 4) | (((qh >> 6) & 3) << 4)) - 32);
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q6K_HD_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS) nc = Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS;
+        const uint8_t * idx  = blk + Q6K_HD_GPU_IDX_OFF;
+        const __half  * vals = (const __half *)(blk + Q6K_HD_GPU_VALS_OFF);
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)__half2float(vals[k]);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q6_k_hifi_dynamic_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q6_k_hifi_dynamic<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
+// Q6_K_HIFI_RES8: 232 bytes/block — q6_K[210] | count[1] | idx[8] | res[8] | _pad[1] | scale_f32[4]
+static constexpr int Q6K_R8_GPU_STRIDE    = 232;
+static constexpr int Q6K_R8_GPU_COUNT_OFF = 210;
+static constexpr int Q6K_R8_GPU_IDX_OFF   = 211;
+static constexpr int Q6K_R8_GPU_VALS_OFF  = 219;
+static constexpr int Q6K_R8_GPU_SCALE_OFF = 228;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q6_k_hifi_res8(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q6K_R8_GPU_STRIDE;
+    const block_q6_K * x   = (const block_q6_K *) blk;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t ip  = tid/32, il = tid - 32*ip;
+    const int64_t is  = 8*ip + il/16;
+    dst_t * y = yy + i*QK_K + 128*ip + il;
+
+    const float d = x->d;
+    const uint8_t * ql = x->ql + 64*ip + il;
+    const uint8_t   qh = x->qh[32*ip + il];
+    const int8_t  * sc = x->scales + is;
+
+    y[ 0] = d * sc[0] * ((int8_t)((ql[ 0] & 0xF) | (((qh >> 0) & 3) << 4)) - 32);
+    y[32] = d * sc[2] * ((int8_t)((ql[32] & 0xF) | (((qh >> 2) & 3) << 4)) - 32);
+    y[64] = d * sc[4] * ((int8_t)((ql[ 0]  >> 4) | (((qh >> 4) & 3) << 4)) - 32);
+    y[96] = d * sc[6] * ((int8_t)((ql[32]  >> 4) | (((qh >> 6) & 3) << 4)) - 32);
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q6K_R8_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q6_K_HIFI_RES8_MAX_OUTLIERS) nc = Q6_K_HIFI_RES8_MAX_OUTLIERS;
+        const uint8_t * idx = blk + Q6K_R8_GPU_IDX_OFF;
+        const int8_t  * res = (const int8_t *)(blk + Q6K_R8_GPU_VALS_OFF);
+        float scale;
+        __builtin_memcpy(&scale, blk + Q6K_R8_GPU_SCALE_OFF, 4);
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)((float)out[(int)idx[k]] + (float)res[k] * scale);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q6_k_hifi_res8_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q6_k_hifi_res8<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
+// Q5_K_HIFI_RES8: 196 bytes/block — q5_K[176] | count[1] | idx[8] | res[8] | scale_e4m3[1] | _res[2]
+static constexpr int Q5K_R8_GPU_STRIDE    = 196;
+static constexpr int Q5K_R8_GPU_COUNT_OFF = 176;
+static constexpr int Q5K_R8_GPU_IDX_OFF   = 177;
+static constexpr int Q5K_R8_GPU_VALS_OFF  = 185;
+static constexpr int Q5K_R8_GPU_SCALE_OFF = 193;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q5_k_hifi_res8(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q5K_R8_GPU_STRIDE;
+    const block_q5_K * x   = (const block_q5_K *) blk;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid/16, ir = tid%16, is = 2*il;
+    dst_t * y = yy + i*QK_K + 64*il + 2*ir;
+
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+    const uint8_t * ql = x->qs + 32*il + 2*ir;
+    const uint8_t * qh = x->qh + 2*ir;
+
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc, m1 = dmin * m;
+    get_scale_min_k4(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc, m2 = dmin * m;
+
+    uint8_t hm = 1 << (2*il);
+    y[ 0] = d1 * ((ql[ 0] & 0xF) + (qh[ 0] & hm ? 16 : 0)) - m1;
+    y[ 1] = d1 * ((ql[ 1] & 0xF) + (qh[ 1] & hm ? 16 : 0)) - m1;
+    hm <<= 1;
+    y[32] = d2 * ((ql[ 0] >>  4) + (qh[ 0] & hm ? 16 : 0)) - m2;
+    y[33] = d2 * ((ql[ 1] >>  4) + (qh[ 1] & hm ? 16 : 0)) - m2;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q5K_R8_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q5_K_HIFI_RES8_MAX_OUTLIERS) nc = Q5_K_HIFI_RES8_MAX_OUTLIERS;
+        const uint8_t * idx   = blk + Q5K_R8_GPU_IDX_OFF;
+        const int8_t  * res   = (const int8_t *)(blk + Q5K_R8_GPU_VALS_OFF);
+        const float scale = hifi_decode_e4m3(blk[Q5K_R8_GPU_SCALE_OFF]);
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)((float)out[(int)idx[k]] + (float)res[k] * scale);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q5_k_hifi_res8_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q5_k_hifi_res8<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
+// Q3_K_HIFI_RES8: 132 bytes/block — q3_K[110] | count[1] | _pad[1] | idx[8] | res[8] | scale_f32[4]
+static constexpr int Q3K_R8_GPU_STRIDE    = 132;
+static constexpr int Q3K_R8_GPU_COUNT_OFF = 110;
+static constexpr int Q3K_R8_GPU_IDX_OFF   = 112;
+static constexpr int Q3K_R8_GPU_VALS_OFF  = 120;
+static constexpr int Q3K_R8_GPU_SCALE_OFF = 128;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q3_k_hifi_res8(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q3K_R8_GPU_STRIDE;
+    const block_q3_K * x   = (const block_q3_K *) blk;
+
+    const int64_t r   = threadIdx.x/4;
+    const int64_t tid = r/2, is0 = r%2;
+    const int64_t l0  = 16*is0 + 4*(threadIdx.x%4);
+    const int64_t n   = tid/4, j = tid - 4*n;
+
+    uint8_t m  = 1 << (4*n + j);
+    int64_t is = 8*n + 2*j + is0;
+    int shift  = 2*j;
+
+    int8_t us = is <  4 ? (x->scales[is-0] & 0xF) | (((x->scales[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (x->scales[is-0] & 0xF) | (((x->scales[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (x->scales[is-8] >>  4) | (((x->scales[is+0] >> 4) & 3) << 4) :
+                          (x->scales[is-8] >>  4) | (((x->scales[is-4] >> 6) & 3) << 4);
+    const float d_all = x->d;
+    const float dl    = d_all * (us - 32);
+
+    dst_t * y  = yy + i*QK_K + 128*n + 32*j;
+    const uint8_t * q  = x->qs + 32*n;
+    const uint8_t * hm = x->hmask;
+    for (int l = l0; l < l0+4; ++l) {
+        y[l] = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q3K_R8_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q3_K_HIFI_RES8_OUTLIERS) nc = Q3_K_HIFI_RES8_OUTLIERS;
+        const uint8_t * idx = blk + Q3K_R8_GPU_IDX_OFF;
+        const int8_t  * res = (const int8_t *)(blk + Q3K_R8_GPU_VALS_OFF);
+        float scale;
+        __builtin_memcpy(&scale, blk + Q3K_R8_GPU_SCALE_OFF, 4);
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)((float)out[(int)idx[k]] + (float)res[k] * scale);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q3_k_hifi_res8_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q3_k_hifi_res8<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
+// Q2_K_HIFI: 96 bytes/block — q2_K[84] | count[1] | idx[3] | vals[3*fp16] | _pad[2]
+static constexpr int Q2K_HIFI_GPU_STRIDE    = 96;
+static constexpr int Q2K_HIFI_GPU_COUNT_OFF = 84;
+static constexpr int Q2K_HIFI_GPU_IDX_OFF   = 85;
+static constexpr int Q2K_HIFI_GPU_VALS_OFF  = 88;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q2_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q2K_HIFI_GPU_STRIDE;
+    const block_q2_K * x   = (const block_q2_K *) blk;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t n   = tid/32, l = tid - 32*n;
+    const int64_t is  = 8*n + l/16;
+
+    const uint8_t q = x->qs[32*n + l];
+    dst_t * y = yy + i*QK_K + 128*n;
+
+    float dall = __low2half(x->dm);
+    float dmin = __high2half(x->dm);
+    y[l+ 0] = dall * (x->scales[is+0] & 0xF) * ((q >> 0) & 3) - dmin * (x->scales[is+0] >> 4);
+    y[l+32] = dall * (x->scales[is+2] & 0xF) * ((q >> 2) & 3) - dmin * (x->scales[is+2] >> 4);
+    y[l+64] = dall * (x->scales[is+4] & 0xF) * ((q >> 4) & 3) - dmin * (x->scales[is+4] >> 4);
+    y[l+96] = dall * (x->scales[is+6] & 0xF) * ((q >> 6) & 3) - dmin * (x->scales[is+6] >> 4);
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q2K_HIFI_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q2_K_HIFI_MAX_OUTLIERS) nc = Q2_K_HIFI_MAX_OUTLIERS;
+        const uint8_t * idx  = blk + Q2K_HIFI_GPU_IDX_OFF;
+        const __half  * vals = (const __half *)(blk + Q2K_HIFI_GPU_VALS_OFF);
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)__half2float(vals[k]);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q2_k_hifi_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q2_k_hifi<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
+// ======================================================================
+// LITE family: INT8 residuals on one-tier-lower base
+// Corrections are additive: out[idx[k]] += res[k] * half_scale
+// ======================================================================
+
+// Q2_K_LITE: 96 bytes/block — q2_K[84] | count[1] | idx[4] | res[4] | _pad[1] | scale_f16[2]
+static constexpr int Q2K_LITE_GPU_STRIDE    = 96;
+static constexpr int Q2K_LITE_GPU_COUNT_OFF = 84;
+static constexpr int Q2K_LITE_GPU_IDX_OFF   = 85;
+static constexpr int Q2K_LITE_GPU_VALS_OFF  = 89;
+static constexpr int Q2K_LITE_GPU_SCALE_OFF = 94;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q2_k_lite(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q2K_LITE_GPU_STRIDE;
+    const block_q2_K * x   = (const block_q2_K *) blk;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t n   = tid/32, l = tid - 32*n;
+    const int64_t is  = 8*n + l/16;
+
+    const uint8_t q = x->qs[32*n + l];
+    dst_t * y = yy + i*QK_K + 128*n;
+
+    float dall = __low2half(x->dm);
+    float dmin = __high2half(x->dm);
+    y[l+ 0] = dall * (x->scales[is+0] & 0xF) * ((q >> 0) & 3) - dmin * (x->scales[is+0] >> 4);
+    y[l+32] = dall * (x->scales[is+2] & 0xF) * ((q >> 2) & 3) - dmin * (x->scales[is+2] >> 4);
+    y[l+64] = dall * (x->scales[is+4] & 0xF) * ((q >> 4) & 3) - dmin * (x->scales[is+4] >> 4);
+    y[l+96] = dall * (x->scales[is+6] & 0xF) * ((q >> 6) & 3) - dmin * (x->scales[is+6] >> 4);
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q2K_LITE_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q2_K_LITE_MAX_RESIDUALS) nc = Q2_K_LITE_MAX_RESIDUALS;
+        const uint8_t * idx = blk + Q2K_LITE_GPU_IDX_OFF;
+        const int8_t  * res = (const int8_t *)(blk + Q2K_LITE_GPU_VALS_OFF);
+        const float scale = __half2float(*(const __half *)(blk + Q2K_LITE_GPU_SCALE_OFF));
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)((float)out[(int)idx[k]] + (float)res[k] * scale);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q2_k_lite_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q2_k_lite<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
+// Q3_K_LITE: 104 bytes/block — q2_K_base[84] | count[1] | idx[8] | res[8] | _pad[1] | scale_f16[2]
+static constexpr int Q3K_LITE_GPU_STRIDE    = 104;
+static constexpr int Q3K_LITE_GPU_COUNT_OFF = 84;
+static constexpr int Q3K_LITE_GPU_IDX_OFF   = 85;
+static constexpr int Q3K_LITE_GPU_VALS_OFF  = 93;
+static constexpr int Q3K_LITE_GPU_SCALE_OFF = 102;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q3_k_lite(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q3K_LITE_GPU_STRIDE;
+    const block_q2_K * x   = (const block_q2_K *) blk;  // Q2_K base
+
+    const int64_t tid = threadIdx.x;
+    const int64_t n   = tid/32, l = tid - 32*n;
+    const int64_t is  = 8*n + l/16;
+
+    const uint8_t q = x->qs[32*n + l];
+    dst_t * y = yy + i*QK_K + 128*n;
+
+    float dall = __low2half(x->dm);
+    float dmin = __high2half(x->dm);
+    y[l+ 0] = dall * (x->scales[is+0] & 0xF) * ((q >> 0) & 3) - dmin * (x->scales[is+0] >> 4);
+    y[l+32] = dall * (x->scales[is+2] & 0xF) * ((q >> 2) & 3) - dmin * (x->scales[is+2] >> 4);
+    y[l+64] = dall * (x->scales[is+4] & 0xF) * ((q >> 4) & 3) - dmin * (x->scales[is+4] >> 4);
+    y[l+96] = dall * (x->scales[is+6] & 0xF) * ((q >> 6) & 3) - dmin * (x->scales[is+6] >> 4);
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q3K_LITE_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q3_K_LITE_MAX_RESIDUALS) nc = Q3_K_LITE_MAX_RESIDUALS;
+        const uint8_t * idx = blk + Q3K_LITE_GPU_IDX_OFF;
+        const int8_t  * res = (const int8_t *)(blk + Q3K_LITE_GPU_VALS_OFF);
+        const float scale = __half2float(*(const __half *)(blk + Q3K_LITE_GPU_SCALE_OFF));
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)((float)out[(int)idx[k]] + (float)res[k] * scale);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q3_k_lite_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q3_k_lite<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
+// Q4_K_LITE: 128 bytes/block — q3_K_base[110] | count[1] | idx[7] | res[7] | _pad[1] | scale_f16[2]
+static constexpr int Q4K_LITE_GPU_STRIDE    = 128;
+static constexpr int Q4K_LITE_GPU_COUNT_OFF = 110;
+static constexpr int Q4K_LITE_GPU_IDX_OFF   = 111;
+static constexpr int Q4K_LITE_GPU_VALS_OFF  = 118;
+static constexpr int Q4K_LITE_GPU_SCALE_OFF = 126;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q4_k_lite(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q4K_LITE_GPU_STRIDE;
+    const block_q3_K * x   = (const block_q3_K *) blk;  // Q3_K base
+
+    const int64_t r   = threadIdx.x/4;
+    const int64_t tid = r/2, is0 = r%2;
+    const int64_t l0  = 16*is0 + 4*(threadIdx.x%4);
+    const int64_t n   = tid/4, j = tid - 4*n;
+
+    uint8_t m  = 1 << (4*n + j);
+    int64_t is = 8*n + 2*j + is0;
+    int shift  = 2*j;
+
+    int8_t us = is <  4 ? (x->scales[is-0] & 0xF) | (((x->scales[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (x->scales[is-0] & 0xF) | (((x->scales[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (x->scales[is-8] >>  4) | (((x->scales[is+0] >> 4) & 3) << 4) :
+                          (x->scales[is-8] >>  4) | (((x->scales[is-4] >> 6) & 3) << 4);
+    const float dl = (float)x->d * (us - 32);
+
+    dst_t * y  = yy + i*QK_K + 128*n + 32*j;
+    const uint8_t * q  = x->qs + 32*n;
+    const uint8_t * hm = x->hmask;
+    for (int l = l0; l < l0+4; ++l) {
+        y[l] = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q4K_LITE_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q4_K_LITE_MAX_RESIDUALS) nc = Q4_K_LITE_MAX_RESIDUALS;
+        const uint8_t * idx = blk + Q4K_LITE_GPU_IDX_OFF;
+        const int8_t  * res = (const int8_t *)(blk + Q4K_LITE_GPU_VALS_OFF);
+        const float scale = __half2float(*(const __half *)(blk + Q4K_LITE_GPU_SCALE_OFF));
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)((float)out[(int)idx[k]] + (float)res[k] * scale);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q4_k_lite_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q4_k_lite<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
+// Q5_K_LITE: 164 bytes/block — q4_K_base[144] | count[1] | idx[8] | res[8] | _pad[1] | scale_f16[2]
+static constexpr int Q5K_LITE_GPU_STRIDE    = 164;
+static constexpr int Q5K_LITE_GPU_COUNT_OFF = 144;
+static constexpr int Q5K_LITE_GPU_IDX_OFF   = 145;
+static constexpr int Q5K_LITE_GPU_VALS_OFF  = 153;
+static constexpr int Q5K_LITE_GPU_SCALE_OFF = 162;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q5_k_lite(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q5K_LITE_GPU_STRIDE;
+    const block_q4_K * x   = (const block_q4_K *) blk;  // Q4_K base
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid/8, ir = tid%8, is = 2*il;
+    dst_t * y = yy + i*QK_K + 64*il + 4*ir;
+
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+    const uint8_t * q = x->qs + 32*il + 4*ir;
+
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc, m1 = dmin * m;
+    get_scale_min_k4(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc, m2 = dmin * m;
+    for (int l = 0; l < 4; ++l) {
+        y[l +  0] = d1 * (q[l] & 0xF) - m1;
+        y[l + 32] = d2 * (q[l] >>  4) - m2;
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q5K_LITE_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q5_K_LITE_MAX_RESIDUALS) nc = Q5_K_LITE_MAX_RESIDUALS;
+        const uint8_t * idx = blk + Q5K_LITE_GPU_IDX_OFF;
+        const int8_t  * res = (const int8_t *)(blk + Q5K_LITE_GPU_VALS_OFF);
+        const float scale = __half2float(*(const __half *)(blk + Q5K_LITE_GPU_SCALE_OFF));
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)((float)out[(int)idx[k]] + (float)res[k] * scale);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q5_k_lite_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q5_k_lite<<<k / QK_K, 32, 0, stream>>>(vx, y);
+}
+
+// Q6_K_LITE: 196 bytes/block — q5_K_base[176] | count[1] | idx[8] | res[8] | _pad[1] | scale_f16[2]
+static constexpr int Q6K_LITE_GPU_STRIDE    = 196;
+static constexpr int Q6K_LITE_GPU_COUNT_OFF = 176;
+static constexpr int Q6K_LITE_GPU_IDX_OFF   = 177;
+static constexpr int Q6K_LITE_GPU_VALS_OFF  = 185;
+static constexpr int Q6K_LITE_GPU_SCALE_OFF = 194;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q6_k_lite(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t    * blk = (const uint8_t *)vx + i * Q6K_LITE_GPU_STRIDE;
+    const block_q5_K * x   = (const block_q5_K *) blk;  // Q5_K base
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid/16, ir = tid%16, is = 2*il;
+    dst_t * y = yy + i*QK_K + 64*il + 2*ir;
+
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+    const uint8_t * ql = x->qs + 32*il + 2*ir;
+    const uint8_t * qh = x->qh + 2*ir;
+
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc, m1 = dmin * m;
+    get_scale_min_k4(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc, m2 = dmin * m;
+
+    uint8_t hm = 1 << (2*il);
+    y[ 0] = d1 * ((ql[ 0] & 0xF) + (qh[ 0] & hm ? 16 : 0)) - m1;
+    y[ 1] = d1 * ((ql[ 1] & 0xF) + (qh[ 1] & hm ? 16 : 0)) - m1;
+    hm <<= 1;
+    y[32] = d2 * ((ql[ 0] >>  4) + (qh[ 0] & hm ? 16 : 0)) - m2;
+    y[33] = d2 * ((ql[ 1] >>  4) + (qh[ 1] & hm ? 16 : 0)) - m2;
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)blk[Q6K_LITE_GPU_COUNT_OFF];
+        if (nc < 0 || nc > Q6_K_LITE_MAX_RESIDUALS) nc = Q6_K_LITE_MAX_RESIDUALS;
+        const uint8_t * idx = blk + Q6K_LITE_GPU_IDX_OFF;
+        const int8_t  * res = (const int8_t *)(blk + Q6K_LITE_GPU_VALS_OFF);
+        const float scale = __half2float(*(const __half *)(blk + Q6K_LITE_GPU_SCALE_OFF));
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx[k]] = (dst_t)((float)out[(int)idx[k]] + (float)res[k] * scale);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q6_k_lite_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    dequantize_block_q6_k_lite<<<k / QK_K, 64, 0, stream>>>(vx, y);
+}
+
 template<typename dst_t>
 static void dequantize_row_q4_0_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
     const int nb32 = k / 32;
@@ -797,6 +1404,30 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_q3_K_cuda;
         case GGML_TYPE_Q3_K_HIFI:
             return dequantize_row_q3_k_hifi_cuda;
+        case GGML_TYPE_Q4_K_HIFI:
+            return dequantize_row_q4_k_hifi_cuda;
+        case GGML_TYPE_Q6_K_HIFI:
+            return dequantize_row_q6_k_hifi_cuda;
+        case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
+            return dequantize_row_q6_k_hifi_dynamic_cuda;
+        case GGML_TYPE_Q6_K_HIFI_RES8:
+            return dequantize_row_q6_k_hifi_res8_cuda;
+        case GGML_TYPE_Q5_K_HIFI_RES8:
+            return dequantize_row_q5_k_hifi_res8_cuda;
+        case GGML_TYPE_Q3_K_HIFI_RES8:
+            return dequantize_row_q3_k_hifi_res8_cuda;
+        case GGML_TYPE_Q2_K_HIFI:
+            return dequantize_row_q2_k_hifi_cuda;
+        case GGML_TYPE_Q2_K_LITE:
+            return dequantize_row_q2_k_lite_cuda;
+        case GGML_TYPE_Q3_K_LITE:
+            return dequantize_row_q3_k_lite_cuda;
+        case GGML_TYPE_Q4_K_LITE:
+            return dequantize_row_q4_k_lite_cuda;
+        case GGML_TYPE_Q5_K_LITE:
+            return dequantize_row_q5_k_lite_cuda;
+        case GGML_TYPE_Q6_K_LITE:
+            return dequantize_row_q6_k_lite_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
         case GGML_TYPE_Q5_K:
@@ -854,6 +1485,30 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_q3_K_cuda;
         case GGML_TYPE_Q3_K_HIFI:
             return dequantize_row_q3_k_hifi_cuda;
+        case GGML_TYPE_Q4_K_HIFI:
+            return dequantize_row_q4_k_hifi_cuda;
+        case GGML_TYPE_Q6_K_HIFI:
+            return dequantize_row_q6_k_hifi_cuda;
+        case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
+            return dequantize_row_q6_k_hifi_dynamic_cuda;
+        case GGML_TYPE_Q6_K_HIFI_RES8:
+            return dequantize_row_q6_k_hifi_res8_cuda;
+        case GGML_TYPE_Q5_K_HIFI_RES8:
+            return dequantize_row_q5_k_hifi_res8_cuda;
+        case GGML_TYPE_Q3_K_HIFI_RES8:
+            return dequantize_row_q3_k_hifi_res8_cuda;
+        case GGML_TYPE_Q2_K_HIFI:
+            return dequantize_row_q2_k_hifi_cuda;
+        case GGML_TYPE_Q2_K_LITE:
+            return dequantize_row_q2_k_lite_cuda;
+        case GGML_TYPE_Q3_K_LITE:
+            return dequantize_row_q3_k_lite_cuda;
+        case GGML_TYPE_Q4_K_LITE:
+            return dequantize_row_q4_k_lite_cuda;
+        case GGML_TYPE_Q5_K_LITE:
+            return dequantize_row_q5_k_lite_cuda;
+        case GGML_TYPE_Q6_K_LITE:
+            return dequantize_row_q6_k_lite_cuda;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
         case GGML_TYPE_Q5_K:
