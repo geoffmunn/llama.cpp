@@ -5782,14 +5782,15 @@ void dequantize_row_q4_k_hifi(const block_q4_k_hifi * x, float * y, int64_t k) {
         }
         memcpy(y + i * QK_K, tmp, QK_K * sizeof(float));
 
-        if (q4_hifi_deq_logged < 2) {
+        if (q4_hifi_deq_logged < 20) {
             q4_hifi_deq_logged++;
-            float d_val   = GGML_FP16_TO_FP32(base->d);
-            float dmin_val = GGML_FP16_TO_FP32(base->dmin);
-            fprintf(stderr, "[Q4_K_HIFI deq  block %d] d=%.6f dmin=%.6f y[0..7]=%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n",
-                    i, d_val, dmin_val,
-                    y[i*QK_K+0], y[i*QK_K+1], y[i*QK_K+2], y[i*QK_K+3],
-                    y[i*QK_K+4], y[i*QK_K+5], y[i*QK_K+6], y[i*QK_K+7]);
+            float d_val = GGML_FP16_TO_FP32(base->d);
+            // Check for extreme values
+            float max_abs = 0.0f;
+            for (int jj = 0; jj < QK_K; jj++) { float av = fabsf((y + i*QK_K)[jj]); if (av > max_abs) max_abs = av; }
+            fprintf(stderr, "[Q4_K_HIFI deq #%02d] d=%.6f max_abs=%.4f y[0..3]=%.4f %.4f %.4f %.4f\n",
+                    q4_hifi_deq_logged, d_val, max_abs,
+                    (y+i*QK_K)[0], (y+i*QK_K)[1], (y+i*QK_K)[2], (y+i*QK_K)[3]);
         }
     }
 }

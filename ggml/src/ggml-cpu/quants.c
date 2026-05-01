@@ -1336,7 +1336,28 @@ void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
     }
     *s = result;
 }
-HIFI_VEC_DOT_Q8K(ggml_vec_dot_q4_k_hifi_q8_K,         block_q4_k_hifi,         dequantize_row_q4_k_hifi)
+// DIAGNOSTIC: hand-written to log output value
+void ggml_vec_dot_q4_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+           const void * GGML_RESTRICT vx, size_t bx,
+           const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)bs; (void)bx; (void)by; (void)nrc;
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+    float sumf = 0.0f;
+    float tmp_x[QK_K];
+    float tmp_y[QK_K];
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q4_k_hifi((const block_q4_k_hifi *)vx + i, tmp_x, QK_K);
+        dequantize_row_q8_K((const block_q8_K *)vy + i, tmp_y, QK_K);
+        for (int j = 0; j < QK_K; j++) sumf += tmp_x[j] * tmp_y[j];
+    }
+    static int q4_hifi_vdot_logged = 0;
+    if (q4_hifi_vdot_logged < 5) {
+        q4_hifi_vdot_logged++;
+        fprintf(stderr, "[Q4_K_HIFI vdot #%d] n=%d sumf=%.6f\n", q4_hifi_vdot_logged, n, sumf);
+    }
+    *s = sumf;
+}
 HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_q8_K,         block_q6_k_hifi,         dequantize_row_q6_k_hifi)
 HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_dynamic_q8_K, block_q6_k_hifi_dynamic, dequantize_row_q6_k_hifi_dynamic)
 HIFI_VEC_DOT_Q8K(ggml_vec_dot_q2_k_hifi_q8_K,         block_q2_k_hifi,         dequantize_row_q2_k_hifi)
