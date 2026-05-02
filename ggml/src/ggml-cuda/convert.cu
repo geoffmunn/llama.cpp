@@ -803,8 +803,8 @@ static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, 
     get_scale_min_k4(is + 1, x->scales, sc, m);
     const float d2 = dall * sc; const float m2 = dmin * m;
     for (int l = 0; l < n; ++l) {
-        y[l + 0] = (dst_t)(d1 * (q[l] & 0xF) - m1);
-        y[l + n] = (dst_t)(d2 * (q[l] >>  4) - m2);
+        y[l +  0] = (dst_t)(d1 * (q[l] & 0xF) - m1);
+        y[l + 32] = (dst_t)(d2 * (q[l] >>  4) - m2);
     }
     __syncthreads();
     if (threadIdx.x == 0) {
