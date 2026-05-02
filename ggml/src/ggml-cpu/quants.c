@@ -4,6 +4,7 @@
 #include "ggml-cpu-impl.h"
 #include "simd-mappings.h"
 #include "ggml-quants.h"
+#include "ggml-quants-hifi.h"
 #include "quants.h"
 
 #include "arch-fallback.h"
@@ -1286,3 +1287,137 @@ void quantize_row_iq4_xs(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
     assert(k % QK_K == 0);
     quantize_iq4_xs(x, y, 1, k, NULL);
 }
+
+// ============================================================
+// HIFI / LITE CPU wrapper quantizers (void * output)
+// ============================================================
+
+void quantize_row_q3_k_hifi(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q3_k_hifi_ref(x, (block_q3_k_hifi *)y, k);
+}
+void quantize_row_q4_k_hifi(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q4_k_hifi_ref(x, (block_q4_k_hifi *)y, k);
+}
+void quantize_row_q6_k_hifi(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q6_k_hifi_ref(x, (block_q6_k_hifi *)y, k);
+}
+void quantize_row_q6_k_hifi_dynamic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q6_k_hifi_dynamic_ref(x, (block_q6_k_hifi_dynamic *)y, k);
+}
+void quantize_row_q2_k_hifi(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q2_k_hifi_ref(x, (block_q2_k_hifi *)y, k);
+}
+void quantize_row_q6_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q6_k_hifi_res8_ref(x, (block_q6_k_hifi_res8 *)y, k);
+}
+void quantize_row_q5_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q5_k_hifi_res8_ref(x, (block_q5_k_hifi_res8 *)y, k);
+}
+void quantize_row_q3_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q3_k_hifi_res8_ref(x, (block_q3_k_hifi_res8 *)y, k);
+}
+void quantize_row_q2_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q2_k_lite_ref(x, (block_q2_k_lite *)y, k);
+}
+void quantize_row_q3_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q3_k_lite_ref(x, (block_q3_k_lite *)y, k);
+}
+void quantize_row_q4_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q4_k_lite_ref(x, (block_q4_k_lite *)y, k);
+}
+void quantize_row_q5_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q5_k_lite_ref(x, (block_q5_k_lite *)y, k);
+}
+void quantize_row_q6_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q6_k_lite_ref(x, (block_q6_k_lite *)y, k);
+}
+
+// ============================================================
+// HIFI / LITE vec_dot implementations
+// ============================================================
+
+// Q3_K_HIFI: delegate to SIMD ggml_vec_dot_q3_K_q8_K on embedded block, then add outlier FMA
+void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                                   const void * GGML_RESTRICT vx, size_t bx,
+                                   const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+    const block_q3_k_hifi * bx_hifi = (const block_q3_k_hifi *)vx;
+    const block_q8_K       * by_q8  = (const block_q8_K *)vy;
+    float result = 0.0f;
+    for (int i = 0; i < nb; i++) {
+        float block_dot = 0.0f;
+        ggml_vec_dot_q3_K_q8_K_generic(QK_K, &block_dot, sizeof(float),
+                                        bx_hifi[i].q3_k_data, sizeof(block_q3_K),
+                                        &by_q8[i], sizeof(block_q8_K), 1);
+        result += block_dot;
+        int nc = (int)bx_hifi[i].outlier_count;
+        if ((unsigned)nc > (unsigned)Q3_K_HIFI_MAX_OUTLIERS) nc = Q3_K_HIFI_MAX_OUTLIERS;
+        const float q8d = by_q8[i].d;
+        for (int j = 0; j < nc; j++) {
+            const int pos = (int)bx_hifi[i].outlier_idx[j];
+            result += GGML_FP16_TO_FP32(bx_hifi[i].outliers[j]) * (q8d * (float)by_q8[i].qs[pos]);
+        }
+    }
+    *s = result;
+    (void)bs; (void)bx; (void)by; (void)nrc;
+}
+
+// Q4_K_HIFI: dequant base block, dot with Q8_K, then apply FP16-zero-sentinel outlier correction
+void ggml_vec_dot_q4_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                                   const void * GGML_RESTRICT vx, size_t bx,
+                                   const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+    const block_q4_k_hifi * x = (const block_q4_k_hifi *)vx;
+    const block_q8_K       * y = (const block_q8_K *)vy;
+    float total = 0.0f;
+    float w[QK_K];
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q4_K((const block_q4_K *)x[i].q4_k_data, w, QK_K);
+        const float dy = y[i].d;
+        const int8_t * q8 = y[i].qs;
+        float sum = 0.0f;
+        for (int j = 0; j < QK_K; j++) sum += w[j] * (float)q8[j] * dy;
+        for (int k = 0; k < Q4_K_HIFI_OUTLIERS; k++) {
+            ggml_half oval = x[i].outliers[k];
+            if (oval == 0) break;
+            int pos = (int)x[i].outlier_idx[k];
+            sum += (GGML_FP16_TO_FP32(oval) - w[pos]) * (float)q8[pos] * dy;
+        }
+        total += sum;
+    }
+    *s = total;
+    (void)bs; (void)bx; (void)by; (void)nrc;
+}
+
+// Generic dequant-then-dot macro for remaining HIFI/LITE types
+#define HIFI_VEC_DOT_Q8K(fn_name, block_type, deq_fn) \
+void fn_name(int n, float * GGML_RESTRICT s, size_t bs, \
+             const void * GGML_RESTRICT vx, size_t bx, \
+             const void * GGML_RESTRICT vy, size_t by, int nrc) { \
+    assert(n % QK_K == 0); \
+    const int nb = n / QK_K; \
+    float sumf = 0.0f; \
+    float tmp_x[QK_K]; \
+    for (int i = 0; i < nb; i++) { \
+        deq_fn((const block_type *)vx + i, tmp_x, QK_K); \
+        const float dy = ((const block_q8_K *)vy)[i].d; \
+        const int8_t * q8 = ((const block_q8_K *)vy)[i].qs; \
+        for (int j = 0; j < QK_K; j++) sumf += tmp_x[j] * (float)q8[j] * dy; \
+    } \
+    *s = sumf; \
+    (void)bs; (void)bx; (void)by; (void)nrc; \
+}
+
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_q8_K,         block_q6_k_hifi,         dequantize_row_q6_k_hifi)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_dynamic_q8_K, block_q6_k_hifi_dynamic, dequantize_row_q6_k_hifi_dynamic)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q2_k_hifi_q8_K,         block_q2_k_hifi,         dequantize_row_q2_k_hifi)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_hifi_res8_q8_K,    block_q6_k_hifi_res8,    dequantize_row_q6_k_hifi_res8)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q5_k_hifi_res8_q8_K,    block_q5_k_hifi_res8,    dequantize_row_q5_k_hifi_res8)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q3_k_hifi_res8_q8_K,    block_q3_k_hifi_res8,    dequantize_row_q3_k_hifi_res8)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q2_k_lite_q8_K,         block_q2_k_lite,         dequantize_row_q2_k_lite)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q3_k_lite_q8_K,         block_q3_k_lite,         dequantize_row_q3_k_lite)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q4_k_lite_q8_K,         block_q4_k_lite,         dequantize_row_q4_k_lite)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q5_k_lite_q8_K,         block_q5_k_lite,         dequantize_row_q5_k_lite)
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q6_k_lite_q8_K,         block_q6_k_lite,         dequantize_row_q6_k_lite)

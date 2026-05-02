@@ -871,13 +871,17 @@ static std::vector<float> softmax(const std::vector<float> & logits) {
 }
 
 static results_log_softmax log_softmax(int n_vocab, const float * logits, int tok) {
+    // Guard against +Inf logits (e.g. from degenerate models) which produce NaN in softmax
+    if (!std::isfinite(logits[tok])) {
+        return {0.0, logits[tok], 1.0f};
+    }
     float max_logit = logits[0];
     for (int i = 1; i < n_vocab; ++i) {
-        max_logit = std::max(max_logit, logits[i]);
+        if (std::isfinite(logits[i])) max_logit = std::max(max_logit, logits[i]);
     }
     double sum_exp = 0.0;
     for (int i = 0; i < n_vocab; ++i) {
-        sum_exp += expf(logits[i] - max_logit);
+        if (std::isfinite(logits[i])) sum_exp += expf(logits[i] - max_logit);
     }
     return {logits[tok] - max_logit - log(sum_exp), logits[tok], expf(logits[tok] - max_logit) / (float) sum_exp};
 }

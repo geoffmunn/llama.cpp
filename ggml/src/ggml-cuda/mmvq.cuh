@@ -2,6 +2,10 @@
 
 #define MMVQ_MAX_BATCH_SIZE 8 // Max. batch size for which to use MMVQ kernels.
 
+// Returns true only for types that have a native MMVQ vec_dot GPU kernel.
+// HIFI/LITE types are excluded; they use dequant+cuBLAS instead.
+bool ggml_cuda_has_mmvq_kernel(ggml_type type);
+
 // Returns the maximum batch size for which MMVQ should be used for MUL_MAT_ID,
 // based on the quantization type and GPU architecture (compute capability).
 int get_mmvq_mmid_max_batch(ggml_type type, int cc);

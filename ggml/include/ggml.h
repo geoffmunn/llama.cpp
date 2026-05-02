@@ -429,7 +429,23 @@ extern "C" {
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
-        GGML_TYPE_COUNT   = 42,
+
+        // HIFI / LITE custom quantization families
+        GGML_TYPE_Q3_K_HIFI         = 42,
+        GGML_TYPE_Q6_K_HIFI         = 43,
+        GGML_TYPE_Q6_K_HIFI_DYNAMIC = 44,
+        GGML_TYPE_Q6_K_HIFI_RES8    = 45,
+        GGML_TYPE_Q5_K_HIFI_RES8    = 46,
+        GGML_TYPE_Q3_K_HIFI_RES8    = 47,
+        GGML_TYPE_Q4_K_HIFI         = 48,
+        GGML_TYPE_Q2_K_HIFI         = 49,
+        GGML_TYPE_Q2_K_LITE         = 50,
+        GGML_TYPE_Q3_K_LITE         = 51,
+        GGML_TYPE_Q4_K_LITE         = 52,
+        GGML_TYPE_Q5_K_LITE         = 53,
+        GGML_TYPE_Q6_K_LITE         = 54,
+
+        GGML_TYPE_COUNT   = 55,
     };
 
     // precision

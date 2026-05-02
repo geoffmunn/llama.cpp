@@ -2353,7 +2353,8 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                    src0->view_src;
 
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
+    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && ggml_cuda_has_mmvq_kernel(src0->type) &&
+                             !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
                              dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
 
     // fusion is not universally faster on Pascal
@@ -2395,7 +2396,8 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     bool use_mul_mat_f     = !ggml_is_quantized(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear
+    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && ggml_cuda_has_mmvq_kernel(src0->type)
+        && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
         && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
     bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear
@@ -4964,6 +4966,20 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ4_NL:
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_BF16:
+                    // HIFI/LITE types — GPU-resident via dequant+cuBLAS path
+                    case GGML_TYPE_Q3_K_HIFI:
+                    case GGML_TYPE_Q6_K_HIFI:
+                    case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
+                    case GGML_TYPE_Q6_K_HIFI_RES8:
+                    case GGML_TYPE_Q5_K_HIFI_RES8:
+                    case GGML_TYPE_Q3_K_HIFI_RES8:
+                    case GGML_TYPE_Q4_K_HIFI:
+                    case GGML_TYPE_Q2_K_HIFI:
+                    case GGML_TYPE_Q2_K_LITE:
+                    case GGML_TYPE_Q3_K_LITE:
+                    case GGML_TYPE_Q4_K_LITE:
+                    case GGML_TYPE_Q5_K_LITE:
+                    case GGML_TYPE_Q6_K_LITE:
                         return true;
                     default:
                         return false;

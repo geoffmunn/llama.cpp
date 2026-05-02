@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake -B build -DGGML_METAL=ON -DLLAMA_METAL=ON -DCMAKE_BUILD_TYPE=Release)",
+      "Bash(cmake --build build --target ggml-base llama-quant)",
+      "Bash(cmake --build build --target llama)",
+      "Bash(./build/bin/llama-quantize --help)"
+    ]
+  }
+}

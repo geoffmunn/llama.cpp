@@ -709,6 +709,130 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
     }
 }
 
+// HIFI dequant kernels — use byte-pointer arithmetic since GGML_COMMON_DECL_CUDA
+// suppresses the HIFI struct definitions in CUDA translation units.
+
+// block_q3_k_hifi byte layout (136 bytes):
+//   [0..109]  = q3_k_data   (embedded block_q3_K, 110 bytes)
+//   [110..117]= outlier_idx (uint8_t × 8)
+//   [118..133]= outliers    (__half × 8)
+//   [134]     = outlier_count
+//   [135]     = _pad
+static constexpr int Q3_K_HIFI_GPU_STRIDE    = 136;
+static constexpr int Q3_K_HIFI_GPU_IDX_OFF   = 110;
+static constexpr int Q3_K_HIFI_GPU_VALS_OFF  = 118;
+static constexpr int Q3_K_HIFI_GPU_COUNT_OFF = 134;
+static constexpr int Q3_K_HIFI_GPU_MAX_OUT   = 8;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t * blk = (const uint8_t *)vx + i * Q3_K_HIFI_GPU_STRIDE;
+    const block_q3_K * x = (const block_q3_K *) blk;  // first 110 bytes = base Q3_K
+
+    const int64_t r   = threadIdx.x/4;
+    const int64_t tid = r/2;
+    const int64_t is0 = r%2;
+    const int64_t l0  = 16*is0 + 4*(threadIdx.x%4);
+    const int64_t n   = tid / 4;
+    const int64_t j   = tid - 4*n;
+    uint8_t m  = 1 << (4*n + j);
+    int64_t is = 8*n + 2*j + is0;
+    int shift  = 2*j;
+    int8_t us = is <  4 ? (x->scales[is-0] & 0xF) | (((x->scales[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (x->scales[is-0] & 0xF) | (((x->scales[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (x->scales[is-8] >>  4) | (((x->scales[is+0] >> 4) & 3) << 4) :
+                          (x->scales[is-8] >>  4) | (((x->scales[is-4] >> 6) & 3) << 4);
+    const float d_all = x->d;
+    const float dl    = d_all * (us - 32);
+    dst_t * y  = yy + i*QK_K + 128*n + 32*j;
+    const uint8_t * q  = x->qs + 32*n;
+    const uint8_t * hm = x->hmask;
+    for (int l = l0; l < l0+4; ++l) {
+        y[l] = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        const uint8_t * idx_ptr = blk + Q3_K_HIFI_GPU_IDX_OFF;
+        const __half  * val_ptr = (const __half *)(blk + Q3_K_HIFI_GPU_VALS_OFF);
+        int nc = (int)(blk[Q3_K_HIFI_GPU_COUNT_OFF]);
+        if (nc < 0 || nc > Q3_K_HIFI_GPU_MAX_OUT) nc = Q3_K_HIFI_GPU_MAX_OUT;
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            out[(int)idx_ptr[k]] = (dst_t)__half2float(val_ptr[k]);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
+                                           const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_K;
+    dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
+}
+
+// block_q4_k_hifi byte layout (168 bytes):
+//   [0..143]  = q4_k_data   (embedded block_q4_K, 144 bytes)
+//   [144..151]= outlier_idx (uint8_t × 8)
+//   [152..167]= outliers    (__half × 8)
+// No outlier_count — uses FP16-zero sentinel.
+static constexpr int Q4_K_HIFI_GPU_STRIDE   = 168;
+static constexpr int Q4_K_HIFI_GPU_IDX_OFF  = 144;
+static constexpr int Q4_K_HIFI_GPU_VALS_OFF = 152;
+static constexpr int Q4_K_HIFI_GPU_MAX_OUT  = 8;
+
+template<typename dst_t>
+static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i   = blockIdx.x;
+    const uint8_t * blk = (const uint8_t *)vx + i * Q4_K_HIFI_GPU_STRIDE;
+    const block_q4_K * x = (const block_q4_K *) blk;  // first 144 bytes = base Q4_K
+
+    // Replicate dequantize_block_q4_K logic (32 threads)
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid/8;
+    const int64_t ir  = tid%8;
+    const int64_t is  = 2*il;
+    const int64_t n   = 4;
+    dst_t * y = yy + i*QK_K + 64*il + n*ir;
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+    const uint8_t * q = x->qs + 32*il + n*ir;
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc; const float m1 = dmin * m;
+    get_scale_min_k4(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc; const float m2 = dmin * m;
+    for (int l = 0; l < n; ++l) {
+        y[l + 0] = (dst_t)(d1 * (q[l] & 0xF) - m1);
+        y[l + n] = (dst_t)(d2 * (q[l] >>  4) - m2);
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        const uint8_t * idx_ptr = blk + Q4_K_HIFI_GPU_IDX_OFF;
+        const __half  * val_ptr = (const __half *)(blk + Q4_K_HIFI_GPU_VALS_OFF);
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < Q4_K_HIFI_GPU_MAX_OUT; k++) {
+            const __half v = val_ptr[k];
+            // FP16-zero sentinel: unused slots store 0x0000
+            if (__half_as_ushort(v) == 0) break;
+            out[(int)idx_ptr[k]] = (dst_t)__half2float(v);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q4_k_hifi_cuda(const void * vx, dst_t * y,
+                                           const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_K;
+    dequantize_block_q4_k_hifi<<<nb, 32, 0, stream>>>(vx, y);
+}
+
+// For remaining HIFI/LITE types: dequantize on CPU and upload.
+// We provide CPU-side wrappers that the convert path can call via the standard
+// to_fp32_cuda_t interface using a staging bounce on the host (handled by convert.cu
+// caller when nullptr is returned — see ggml_cuda_op_dequantize).
+// For now, return nullptr and let the CPU-fallback path handle them.
+
 to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q1_0:
@@ -758,6 +882,10 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_mxfp4_cuda;
         case GGML_TYPE_NVFP4:
             return dequantize_row_nvfp4_cuda;
+        case GGML_TYPE_Q3_K_HIFI:
+            return dequantize_row_q3_k_hifi_cuda;
+        case GGML_TYPE_Q4_K_HIFI:
+            return dequantize_row_q4_k_hifi_cuda;
         case GGML_TYPE_F32:
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_BF16:
@@ -813,6 +941,10 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_mxfp4_cuda;
         case GGML_TYPE_NVFP4:
             return dequantize_row_nvfp4_cuda;
+        case GGML_TYPE_Q3_K_HIFI:
+            return dequantize_row_q3_k_hifi_cuda;
+        case GGML_TYPE_Q4_K_HIFI:
+            return dequantize_row_q4_k_hifi_cuda;
         case GGML_TYPE_F16:
             return convert_unary_cont_cuda<half>;
         case GGML_TYPE_BF16:

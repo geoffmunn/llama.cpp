@@ -2,6 +2,7 @@
 #include "ggml-common.h"
 
 #include "ggml-quants.h"
+#include "ggml-quants-hifi.h"
 #include "ggml-impl.h"
 #include "ggml-cpu/ggml-cpu-impl.h"
 #include "ggml-cpu.h"
@@ -5478,7 +5479,21 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_I16:
         case GGML_TYPE_I32:
         case GGML_TYPE_I64:
-            // nothing to validate
+        // HIFI / LITE types — size check above is sufficient
+        case GGML_TYPE_Q3_K_HIFI:
+        case GGML_TYPE_Q6_K_HIFI:
+        case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
+        case GGML_TYPE_Q6_K_HIFI_RES8:
+        case GGML_TYPE_Q5_K_HIFI_RES8:
+        case GGML_TYPE_Q3_K_HIFI_RES8:
+        case GGML_TYPE_Q4_K_HIFI:
+        case GGML_TYPE_Q2_K_HIFI:
+        case GGML_TYPE_Q2_K_LITE:
+        case GGML_TYPE_Q3_K_LITE:
+        case GGML_TYPE_Q4_K_LITE:
+        case GGML_TYPE_Q5_K_LITE:
+        case GGML_TYPE_Q6_K_LITE:
+            // nothing to validate beyond size check above
             break;
         default:
             {
@@ -5488,4 +5503,930 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
     }
 
     return true;
+}
+
+// ============================================================
+// HIFI / LITE quantization implementations
+// ============================================================
+
+// --- Helpers ---
+
+// Select top-N outlier positions by |weight| * importance
+static int hifi_select_fp16_outliers(const float * w, int n, int n_out,
+                                      const float * imatrix,
+                                      uint8_t * out_idx, float * out_vals) {
+    bool used[QK_K];
+    memset(used, 0, sizeof(bool) * (size_t)n);
+    uint8_t selected[QK_K];
+    int found = 0;
+
+    for (int k = 0; k < n_out; k++) {
+        int best = -1;
+        float best_score = -1.0f;
+        for (int i = 0; i < n; i++) {
+            if (!used[i]) {
+                float score = fabsf(w[i]) * (imatrix ? fabsf(imatrix[i]) : 1.0f);
+                if (score > best_score) {
+                    best_score = score;
+                    best = i;
+                }
+            }
+        }
+        if (best < 0 || best_score <= 0.0f) break;
+        selected[found++] = (uint8_t)best;
+        used[best] = true;
+    }
+
+    // Sort indices ascending
+    for (int i = 0; i < found - 1; i++) {
+        for (int j = i + 1; j < found; j++) {
+            if (selected[j] < selected[i]) {
+                uint8_t tmp = selected[i]; selected[i] = selected[j]; selected[j] = tmp;
+            }
+        }
+    }
+    for (int i = 0; i < found; i++) {
+        out_idx[i]  = selected[i];
+        out_vals[i] = w[selected[i]];
+    }
+    return found;
+}
+
+// Select top-N residual positions by |err| * importance
+static int hifi_select_residuals(const float * err, int n, int n_out,
+                                  const float * imatrix,
+                                  uint8_t * out_idx, float * out_errs) {
+    bool used[QK_K];
+    memset(used, 0, sizeof(bool) * (size_t)n);
+    uint8_t selected[QK_K];
+    int found = 0;
+
+    for (int k = 0; k < n_out; k++) {
+        int best = -1;
+        float best_score = -1.0f;
+        for (int i = 0; i < n; i++) {
+            if (!used[i]) {
+                float score = fabsf(err[i]) * (imatrix ? fabsf(imatrix[i]) : 1.0f);
+                if (score > best_score) {
+                    best_score = score;
+                    best = i;
+                }
+            }
+        }
+        if (best < 0 || best_score <= 0.0f) break;
+        selected[found++] = (uint8_t)best;
+        used[best] = true;
+    }
+
+    // Sort ascending
+    for (int i = 0; i < found - 1; i++) {
+        for (int j = i + 1; j < found; j++) {
+            if (selected[j] < selected[i]) {
+                uint8_t tmp = selected[i]; selected[i] = selected[j]; selected[j] = tmp;
+            }
+        }
+    }
+    for (int i = 0; i < found; i++) {
+        out_idx[i]  = selected[i];
+        out_errs[i] = err[selected[i]];
+    }
+    return found;
+}
+
+// E4M3 FP8 encode/decode (bias 7)
+static uint8_t float_to_e4m3(float v) {
+    if (v <= 0.0f) return 0;
+    if (v > 448.0f) v = 448.0f;
+    uint32_t bits;
+    memcpy(&bits, &v, 4);
+    int exp      = (int)((bits >> 23) & 0xFF) - 127 + 7;
+    int mantissa = (int)((bits >> 20) & 0x7);
+    if (exp < 0) return 0;
+    if (exp > 15) { exp = 15; mantissa = 7; }
+    return (uint8_t)((exp << 3) | mantissa);
+}
+
+static float e4m3_to_float(uint8_t v) {
+    if (v == 0) return 0.0f;
+    int exp      = (v >> 3) & 0xF;
+    int mantissa = v & 0x7;
+    float m = 1.0f + (float)mantissa / 8.0f;
+    if (exp == 0) return m / (float)(1 << 6);
+    return m * (float)(1 << (exp - 7 < 0 ? 0 : exp - 7)) *
+           (exp < 7 ? (1.0f / (float)(1 << (7 - exp))) : 1.0f);
+}
+
+// ============================================================
+// Q3_K_HIFI
+// ============================================================
+
+void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    int n_out = ggml_q3_hifi_get_tensor_outliers();
+    if (n_out <= 0) n_out = Q3_K_HIFI_MAX_OUTLIERS;
+
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+
+        uint8_t oidx[Q3_K_HIFI_MAX_OUTLIERS];
+        float   ovals[Q3_K_HIFI_MAX_OUTLIERS];
+        int nc = hifi_select_fp16_outliers(src, QK_K, n_out, NULL, oidx, ovals);
+
+        memcpy(tmp, src, QK_K * sizeof(float));
+        for (int j = 0; j < nc; j++) tmp[oidx[j]] = 0.0f;
+
+        quantize_row_q3_K_ref(tmp, (block_q3_K *)y[i].q3_k_data, QK_K);
+
+        for (int j = 0; j < nc; j++) {
+            y[i].outlier_idx[j] = oidx[j];
+            y[i].outliers[j]    = GGML_FP32_TO_FP16(ovals[j]);
+        }
+        for (int j = nc; j < Q3_K_HIFI_MAX_OUTLIERS; j++) {
+            y[i].outlier_idx[j] = 0;
+            y[i].outliers[j]    = GGML_FP32_TO_FP16(0.0f);
+        }
+        y[i].outlier_count = (uint8_t)nc;
+        y[i]._pad = 0;
+    }
+}
+
+void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q3_K((const block_q3_K *)x[i].q3_k_data, tmp, QK_K);
+        int nc = (int)x[i].outlier_count;
+        if (nc < 0 || nc > Q3_K_HIFI_MAX_OUTLIERS) nc = Q3_K_HIFI_MAX_OUTLIERS;
+        for (int j = 0; j < nc; j++) {
+            tmp[x[i].outlier_idx[j]] = GGML_FP16_TO_FP32(x[i].outliers[j]);
+        }
+        memcpy(y + i * QK_K, tmp, QK_K * sizeof(float));
+    }
+}
+
+size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                           int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_q3_k_hifi_ref(src + row * n_per_row,
+                                    (block_q3_k_hifi *)dst + row * nb, n_per_row);
+    }
+    return (size_t)nrows * (size_t)nb * sizeof(block_q3_k_hifi);
+}
+
+// ============================================================
+// Q4_K_HIFI
+// ============================================================
+
+void quantize_row_q4_k_hifi_ref(const float * GGML_RESTRICT x, block_q4_k_hifi * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    int n_out = ggml_q3_hifi_get_tensor_outliers();
+    if (n_out <= 0) n_out = Q4_K_HIFI_MAX_OUTLIERS;
+
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+
+        uint8_t oidx[Q4_K_HIFI_MAX_OUTLIERS];
+        float   ovals[Q4_K_HIFI_MAX_OUTLIERS];
+        int nc = hifi_select_fp16_outliers(src, QK_K, n_out, NULL, oidx, ovals);
+
+        memcpy(tmp, src, QK_K * sizeof(float));
+        for (int j = 0; j < nc; j++) tmp[oidx[j]] = 0.0f;
+
+        quantize_row_q4_K_ref(tmp, (block_q4_K *)y[i].q4_k_data, QK_K);
+
+        for (int j = 0; j < nc; j++) {
+            y[i].outlier_idx[j] = oidx[j];
+            y[i].outliers[j]    = GGML_FP32_TO_FP16(ovals[j]);
+        }
+        for (int j = nc; j < Q4_K_HIFI_MAX_OUTLIERS; j++) {
+            y[i].outlier_idx[j] = 0;
+            y[i].outliers[j]    = GGML_FP32_TO_FP16(0.0f);
+        }
+    }
+}
+
+void dequantize_row_q4_k_hifi(const block_q4_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q4_K((const block_q4_K *)x[i].q4_k_data, tmp, QK_K);
+        for (int j = 0; j < Q4_K_HIFI_MAX_OUTLIERS; j++) {
+            ggml_half oval = x[i].outliers[j];
+            if (oval == 0) break;
+            tmp[x[i].outlier_idx[j]] = GGML_FP16_TO_FP32(oval);
+        }
+        memcpy(y + i * QK_K, tmp, QK_K * sizeof(float));
+    }
+}
+
+size_t quantize_q4_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                           int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_q4_k_hifi_ref(src + row * n_per_row,
+                                    (block_q4_k_hifi *)dst + row * nb, n_per_row);
+    }
+    return (size_t)nrows * (size_t)nb * sizeof(block_q4_k_hifi);
+}
+
+// ============================================================
+// Q6_K_HIFI
+// ============================================================
+
+void quantize_row_q6_k_hifi_ref(const float * GGML_RESTRICT x, block_q6_k_hifi * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+
+        uint8_t oidx[Q6_K_HIFI_OUTLIERS];
+        float   ovals[Q6_K_HIFI_OUTLIERS];
+        int nc = hifi_select_fp16_outliers(src, QK_K, Q6_K_HIFI_OUTLIERS, NULL, oidx, ovals);
+
+        memcpy(tmp, src, QK_K * sizeof(float));
+        for (int j = 0; j < nc; j++) tmp[oidx[j]] = 0.0f;
+
+        quantize_row_q6_K_ref(tmp, (block_q6_K *)&y[i], QK_K);
+
+        for (int j = 0; j < nc; j++) {
+            y[i].outlier_idx[j]  = oidx[j];
+            y[i].outlier_vals[j] = GGML_FP32_TO_FP16(ovals[j]);
+        }
+        for (int j = nc; j < Q6_K_HIFI_OUTLIERS; j++) {
+            y[i].outlier_idx[j]  = 0;
+            y[i].outlier_vals[j] = GGML_FP32_TO_FP16(0.0f);
+        }
+    }
+}
+
+void dequantize_row_q6_k_hifi(const block_q6_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q6_K((const block_q6_K *)&x[i], tmp, QK_K);
+        for (int j = 0; j < Q6_K_HIFI_OUTLIERS; j++) {
+            ggml_half oval = x[i].outlier_vals[j];
+            if (oval == 0) break;
+            tmp[x[i].outlier_idx[j]] = GGML_FP16_TO_FP32(oval);
+        }
+        memcpy(y + i * QK_K, tmp, QK_K * sizeof(float));
+    }
+}
+
+size_t quantize_q6_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                           int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_q6_k_hifi_ref(src + row * n_per_row,
+                                    (block_q6_k_hifi *)dst + row * nb, n_per_row);
+    }
+    return (size_t)nrows * (size_t)nb * sizeof(block_q6_k_hifi);
+}
+
+// ============================================================
+// Q6_K_HIFI_DYNAMIC
+// ============================================================
+
+void quantize_row_q6_k_hifi_dynamic_ref(const float * GGML_RESTRICT x, block_q6_k_hifi_dynamic * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+
+        uint8_t oidx[Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS];
+        float   ovals[Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS];
+        int nc = hifi_select_fp16_outliers(src, QK_K, Q6_K_HIFI_DYNAMIC_DEFAULT_OUTLIERS,
+                                           NULL, oidx, ovals);
+        if (nc < Q6_K_HIFI_DYNAMIC_MIN_OUTLIERS) nc = Q6_K_HIFI_DYNAMIC_MIN_OUTLIERS;
+
+        memcpy(tmp, src, QK_K * sizeof(float));
+        for (int j = 0; j < nc; j++) tmp[oidx[j]] = 0.0f;
+
+        quantize_row_q6_K_ref(tmp, (block_q6_K *)&y[i], QK_K);
+
+        y[i].outlier_count = (uint8_t)nc;
+        y[i]._padding = 0;
+        for (int j = 0; j < nc; j++) {
+            y[i].outlier_idx[j]  = oidx[j];
+            y[i].outlier_vals[j] = GGML_FP32_TO_FP16(ovals[j]);
+        }
+        for (int j = nc; j < Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS; j++) {
+            y[i].outlier_idx[j]  = 0;
+            y[i].outlier_vals[j] = GGML_FP32_TO_FP16(0.0f);
+        }
+    }
+}
+
+void dequantize_row_q6_k_hifi_dynamic(const block_q6_k_hifi_dynamic * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q6_K((const block_q6_K *)&x[i], tmp, QK_K);
+        int nc = (int)x[i].outlier_count;
+        if (nc < 0 || nc > Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS) nc = Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS;
+        for (int j = 0; j < nc; j++) {
+            tmp[x[i].outlier_idx[j]] = GGML_FP16_TO_FP32(x[i].outlier_vals[j]);
+        }
+        memcpy(y + i * QK_K, tmp, QK_K * sizeof(float));
+    }
+}
+
+size_t quantize_q6_k_hifi_dynamic(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                                   int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_q6_k_hifi_dynamic_ref(src + row * n_per_row,
+                                            (block_q6_k_hifi_dynamic *)dst + row * nb, n_per_row);
+    }
+    return (size_t)nrows * (size_t)nb * sizeof(block_q6_k_hifi_dynamic);
+}
+
+// ============================================================
+// Q2_K_HIFI
+// ============================================================
+
+void quantize_row_q2_k_hifi_ref(const float * GGML_RESTRICT x, block_q2_k_hifi * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+
+        uint8_t oidx[Q2_K_HIFI_MAX_OUTLIERS];
+        float   ovals[Q2_K_HIFI_MAX_OUTLIERS];
+        int nc = hifi_select_fp16_outliers(src, QK_K, Q2_K_HIFI_MAX_OUTLIERS, NULL, oidx, ovals);
+
+        memcpy(tmp, src, QK_K * sizeof(float));
+        for (int j = 0; j < nc; j++) tmp[oidx[j]] = 0.0f;
+
+        quantize_row_q2_K_ref(tmp, (block_q2_K *)&y[i], QK_K);
+
+        y[i].outlier_count = (uint8_t)nc;
+        for (int j = 0; j < nc; j++) {
+            y[i].outlier_idx[j]  = oidx[j];
+            y[i].outlier_vals[j] = GGML_FP32_TO_FP16(ovals[j]);
+        }
+        for (int j = nc; j < Q2_K_HIFI_MAX_OUTLIERS; j++) {
+            y[i].outlier_idx[j]  = 0;
+            y[i].outlier_vals[j] = GGML_FP32_TO_FP16(0.0f);
+        }
+        y[i]._pad[0] = 0;
+        y[i]._pad[1] = 0;
+    }
+}
+
+void dequantize_row_q2_k_hifi(const block_q2_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float tmp[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q2_K((const block_q2_K *)&x[i], tmp, QK_K);
+        int nc = (int)(x[i].outlier_count & 0x7F);
+        if (nc > Q2_K_HIFI_MAX_OUTLIERS) nc = Q2_K_HIFI_MAX_OUTLIERS;
+        for (int j = 0; j < nc; j++) {
+            tmp[x[i].outlier_idx[j]] = GGML_FP16_TO_FP32(x[i].outlier_vals[j]);
+        }
+        memcpy(y + i * QK_K, tmp, QK_K * sizeof(float));
+    }
+}
+
+size_t quantize_q2_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                           int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_q2_k_hifi_ref(src + row * n_per_row,
+                                    (block_q2_k_hifi *)dst + row * nb, n_per_row);
+    }
+    return (size_t)nrows * (size_t)nb * sizeof(block_q2_k_hifi);
+}
+
+// ============================================================
+// Q6_K_HIFI_RES8
+// ============================================================
+
+void quantize_row_q6_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q6_k_hifi_res8 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float decoded[QK_K], err[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+
+        quantize_row_q6_K_ref(src, (block_q6_K *)&y[i], QK_K);
+        dequantize_row_q6_K((const block_q6_K *)&y[i], decoded, QK_K);
+
+        for (int j = 0; j < QK_K; j++) err[j] = src[j] - decoded[j];
+
+        int n_out = Q6_K_HIFI_RES8_MAX_OUTLIERS;
+        const ggml_hifi_quant_context * ctx = ggml_hifi_get_context();
+        if (ctx && ctx->is_active) n_out = ctx->outlier_count;
+
+        uint8_t ridx[Q6_K_HIFI_RES8_MAX_OUTLIERS];
+        float   rerr[Q6_K_HIFI_RES8_MAX_OUTLIERS];
+        int nc = hifi_select_residuals(err, QK_K, n_out, NULL, ridx, rerr);
+
+        float max_err = 0.0f;
+        for (int j = 0; j < nc; j++) {
+            if (fabsf(rerr[j]) > max_err) max_err = fabsf(rerr[j]);
+        }
+        float rscale = (max_err > 0.0f) ? max_err / 127.0f : 1.0f;
+
+        y[i].outlier_count = (uint8_t)nc;
+        y[i]._padding = 0;
+        y[i].residual_scale = rscale;
+        for (int j = 0; j < nc; j++) {
+            y[i].outlier_idx[j]   = ridx[j];
+            y[i].residual_vals[j] = (int8_t)roundf(rerr[j] / rscale);
+        }
+        for (int j = nc; j < Q6_K_HIFI_RES8_MAX_OUTLIERS; j++) {
+            y[i].outlier_idx[j]   = 0;
+            y[i].residual_vals[j] = 0;
+        }
+    }
+}
+
+void dequantize_row_q6_k_hifi_res8(const block_q6_k_hifi_res8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q6_K((const block_q6_K *)&x[i], y + i * QK_K, QK_K);
+        int nc = (int)x[i].outlier_count;
+        if (nc < 0 || nc > Q6_K_HIFI_RES8_MAX_OUTLIERS) nc = Q6_K_HIFI_RES8_MAX_OUTLIERS;
+        float rscale = x[i].residual_scale;
+        for (int j = 0; j < nc; j++) {
+            y[i * QK_K + x[i].outlier_idx[j]] += rscale * ((float)x[i].residual_vals[j] / 127.0f);
+        }
+    }
+}
+
+size_t quantize_q6_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                                int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_q6_k_hifi_res8_ref(src + row * n_per_row,
+                                         (block_q6_k_hifi_res8 *)dst + row * nb, n_per_row);
+    }
+    return (size_t)nrows * (size_t)nb * sizeof(block_q6_k_hifi_res8);
+}
+
+// ============================================================
+// Q5_K_HIFI_RES8
+// ============================================================
+
+void quantize_row_q5_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q5_k_hifi_res8 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float decoded[QK_K], err[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+
+        quantize_row_q5_K_ref(src, (block_q5_K *)&y[i], QK_K);
+        dequantize_row_q5_K((const block_q5_K *)&y[i], decoded, QK_K);
+
+        for (int j = 0; j < QK_K; j++) err[j] = src[j] - decoded[j];
+
+        int n_out = Q5_K_HIFI_RES8_MAX_OUTLIERS;
+        const ggml_hifi_quant_context * ctx = ggml_hifi_get_context();
+        if (ctx && ctx->is_active) n_out = ctx->outlier_count;
+
+        uint8_t ridx[Q5_K_HIFI_RES8_MAX_OUTLIERS];
+        float   rerr[Q5_K_HIFI_RES8_MAX_OUTLIERS];
+        int nc = hifi_select_residuals(err, QK_K, n_out, NULL, ridx, rerr);
+
+        float max_err = 0.0f;
+        for (int j = 0; j < nc; j++) {
+            if (fabsf(rerr[j]) > max_err) max_err = fabsf(rerr[j]);
+        }
+
+        y[i].outlier_count       = (uint8_t)nc;
+        y[i].residual_scale_e4m3 = float_to_e4m3(max_err > 0.0f ? max_err / 127.0f : 1.0f);
+        y[i]._reserved[0]        = 0;
+        y[i]._reserved[1]        = 0;
+
+        float rscale = e4m3_to_float(y[i].residual_scale_e4m3);
+        if (rscale < 1e-20f) rscale = 1e-20f;
+
+        for (int j = 0; j < nc; j++) {
+            y[i].outlier_idx[j]    = ridx[j];
+            y[i].residual_vals[j]  = (int8_t)roundf(rerr[j] / rscale);
+        }
+        for (int j = nc; j < Q5_K_HIFI_RES8_MAX_OUTLIERS; j++) {
+            y[i].outlier_idx[j]   = 0;
+            y[i].residual_vals[j] = 0;
+        }
+    }
+}
+
+void dequantize_row_q5_k_hifi_res8(const block_q5_k_hifi_res8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q5_K((const block_q5_K *)&x[i], y + i * QK_K, QK_K);
+        int nc = (int)x[i].outlier_count;
+        if (nc < 0 || nc > Q5_K_HIFI_RES8_MAX_OUTLIERS) nc = Q5_K_HIFI_RES8_MAX_OUTLIERS;
+        float rscale = e4m3_to_float(x[i].residual_scale_e4m3);
+        for (int j = 0; j < nc; j++) {
+            y[i * QK_K + x[i].outlier_idx[j]] += rscale * ((float)x[i].residual_vals[j] / 127.0f);
+        }
+    }
+}
+
+size_t quantize_q5_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                                int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_q5_k_hifi_res8_ref(src + row * n_per_row,
+                                         (block_q5_k_hifi_res8 *)dst + row * nb, n_per_row);
+    }
+    return (size_t)nrows * (size_t)nb * sizeof(block_q5_k_hifi_res8);
+}
+
+// ============================================================
+// Q3_K_HIFI_RES8
+// ============================================================
+
+void quantize_row_q3_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q3_k_hifi_res8 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float decoded[QK_K], err[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+
+        quantize_row_q3_K_ref(src, (block_q3_K *)&y[i], QK_K);
+        dequantize_row_q3_K((const block_q3_K *)&y[i], decoded, QK_K);
+
+        for (int j = 0; j < QK_K; j++) err[j] = src[j] - decoded[j];
+
+        uint8_t ridx[Q3_K_HIFI_RES8_OUTLIERS];
+        float   rerr[Q3_K_HIFI_RES8_OUTLIERS];
+        int nc = hifi_select_residuals(err, QK_K, Q3_K_HIFI_RES8_OUTLIERS, NULL, ridx, rerr);
+
+        float max_err = 0.0f;
+        for (int j = 0; j < nc; j++) {
+            if (fabsf(rerr[j]) > max_err) max_err = fabsf(rerr[j]);
+        }
+        float rscale = (max_err > 0.0f) ? max_err / 127.0f : 1.0f;
+
+        y[i].outlier_count  = (uint8_t)nc;
+        y[i]._pad1          = 0;
+        y[i].residual_scale = rscale;
+        for (int j = 0; j < nc; j++) {
+            y[i].outlier_idx[j]    = ridx[j];
+            y[i].residual_vals[j]  = (int8_t)roundf(rerr[j] / rscale);
+        }
+        for (int j = nc; j < Q3_K_HIFI_RES8_OUTLIERS; j++) {
+            y[i].outlier_idx[j]   = 0;
+            y[i].residual_vals[j] = 0;
+        }
+    }
+}
+
+void dequantize_row_q3_k_hifi_res8(const block_q3_k_hifi_res8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q3_K((const block_q3_K *)&x[i], y + i * QK_K, QK_K);
+        int nc = (int)x[i].outlier_count;
+        if (nc < 0 || nc > Q3_K_HIFI_RES8_OUTLIERS) nc = Q3_K_HIFI_RES8_OUTLIERS;
+        float rscale = x[i].residual_scale;
+        for (int j = 0; j < nc; j++) {
+            y[i * QK_K + x[i].outlier_idx[j]] += rscale * ((float)x[i].residual_vals[j] / 127.0f);
+        }
+    }
+}
+
+size_t quantize_q3_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                                int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++) {
+        quantize_row_q3_k_hifi_res8_ref(src + row * n_per_row,
+                                         (block_q3_k_hifi_res8 *)dst + row * nb, n_per_row);
+    }
+    return (size_t)nrows * (size_t)nb * sizeof(block_q3_k_hifi_res8);
+}
+
+// ============================================================
+// LITE types
+// ============================================================
+
+// Q2_K_LITE  (Q2_K base)
+void quantize_row_q2_k_lite_ref(const float * GGML_RESTRICT x, block_q2_k_lite * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float decoded[QK_K], err[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+        quantize_row_q2_K_ref(src, (block_q2_K *)&y[i], QK_K);
+        dequantize_row_q2_K((const block_q2_K *)&y[i], decoded, QK_K);
+        for (int j = 0; j < QK_K; j++) err[j] = src[j] - decoded[j];
+
+        uint8_t ridx[Q2_K_LITE_MAX_RESIDUALS];
+        float   rerr[Q2_K_LITE_MAX_RESIDUALS];
+        int nc = hifi_select_residuals(err, QK_K, Q2_K_LITE_MAX_RESIDUALS, NULL, ridx, rerr);
+
+        float max_err = 0.0f;
+        for (int j = 0; j < nc; j++) if (fabsf(rerr[j]) > max_err) max_err = fabsf(rerr[j]);
+        float rscale = (max_err > 0.0f) ? max_err / 127.0f : 1.0f;
+
+        y[i].residual_count = (uint8_t)nc;
+        y[i].residual_scale = GGML_FP32_TO_FP16(rscale);
+        y[i]._pad = 0;
+        for (int j = 0; j < nc; j++) {
+            y[i].residual_idx[j]  = ridx[j];
+            y[i].residual_vals[j] = (int8_t)roundf(rerr[j] / rscale);
+        }
+        for (int j = nc; j < Q2_K_LITE_MAX_RESIDUALS; j++) {
+            y[i].residual_idx[j] = 0; y[i].residual_vals[j] = 0;
+        }
+    }
+}
+
+void dequantize_row_q2_k_lite(const block_q2_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q2_K((const block_q2_K *)&x[i], y + i * QK_K, QK_K);
+        int nc = (int)x[i].residual_count;
+        if (nc < 0 || nc > Q2_K_LITE_MAX_RESIDUALS) nc = Q2_K_LITE_MAX_RESIDUALS;
+        float rscale = GGML_FP16_TO_FP32(x[i].residual_scale);
+        for (int j = 0; j < nc; j++)
+            y[i * QK_K + x[i].residual_idx[j]] += rscale * ((float)x[i].residual_vals[j] / 127.0f);
+    }
+}
+
+size_t quantize_q2_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                           int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++)
+        quantize_row_q2_k_lite_ref(src + row * n_per_row, (block_q2_k_lite *)dst + row * nb, n_per_row);
+    return (size_t)nrows * (size_t)nb * sizeof(block_q2_k_lite);
+}
+
+// Q3_K_LITE  (Q2_K base)
+void quantize_row_q3_k_lite_ref(const float * GGML_RESTRICT x, block_q3_k_lite * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float decoded[QK_K], err[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+        quantize_row_q2_K_ref(src, (block_q2_K *)&y[i], QK_K);
+        dequantize_row_q2_K((const block_q2_K *)&y[i], decoded, QK_K);
+        for (int j = 0; j < QK_K; j++) err[j] = src[j] - decoded[j];
+
+        uint8_t ridx[Q3_K_LITE_MAX_RESIDUALS];
+        float   rerr[Q3_K_LITE_MAX_RESIDUALS];
+        int nc = hifi_select_residuals(err, QK_K, Q3_K_LITE_MAX_RESIDUALS, NULL, ridx, rerr);
+
+        float max_err = 0.0f;
+        for (int j = 0; j < nc; j++) if (fabsf(rerr[j]) > max_err) max_err = fabsf(rerr[j]);
+        float rscale = (max_err > 0.0f) ? max_err / 127.0f : 1.0f;
+
+        y[i].residual_count = (uint8_t)nc;
+        y[i].residual_scale = GGML_FP32_TO_FP16(rscale);
+        y[i]._pad = 0;
+        for (int j = 0; j < nc; j++) {
+            y[i].residual_idx[j]  = ridx[j];
+            y[i].residual_vals[j] = (int8_t)roundf(rerr[j] / rscale);
+        }
+        for (int j = nc; j < Q3_K_LITE_MAX_RESIDUALS; j++) {
+            y[i].residual_idx[j] = 0; y[i].residual_vals[j] = 0;
+        }
+    }
+}
+
+void dequantize_row_q3_k_lite(const block_q3_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q2_K((const block_q2_K *)&x[i], y + i * QK_K, QK_K);
+        int nc = (int)x[i].residual_count;
+        if (nc < 0 || nc > Q3_K_LITE_MAX_RESIDUALS) nc = Q3_K_LITE_MAX_RESIDUALS;
+        float rscale = GGML_FP16_TO_FP32(x[i].residual_scale);
+        for (int j = 0; j < nc; j++)
+            y[i * QK_K + x[i].residual_idx[j]] += rscale * ((float)x[i].residual_vals[j] / 127.0f);
+    }
+}
+
+size_t quantize_q3_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                           int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++)
+        quantize_row_q3_k_lite_ref(src + row * n_per_row, (block_q3_k_lite *)dst + row * nb, n_per_row);
+    return (size_t)nrows * (size_t)nb * sizeof(block_q3_k_lite);
+}
+
+// Q4_K_LITE  (Q3_K base)
+void quantize_row_q4_k_lite_ref(const float * GGML_RESTRICT x, block_q4_k_lite * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float decoded[QK_K], err[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+        quantize_row_q3_K_ref(src, (block_q3_K *)&y[i], QK_K);
+        dequantize_row_q3_K((const block_q3_K *)&y[i], decoded, QK_K);
+        for (int j = 0; j < QK_K; j++) err[j] = src[j] - decoded[j];
+
+        uint8_t ridx[Q4_K_LITE_MAX_RESIDUALS];
+        float   rerr[Q4_K_LITE_MAX_RESIDUALS];
+        int nc = hifi_select_residuals(err, QK_K, Q4_K_LITE_MAX_RESIDUALS, NULL, ridx, rerr);
+
+        float max_err = 0.0f;
+        for (int j = 0; j < nc; j++) if (fabsf(rerr[j]) > max_err) max_err = fabsf(rerr[j]);
+        float rscale = (max_err > 0.0f) ? max_err / 127.0f : 1.0f;
+
+        y[i].residual_count = (uint8_t)nc;
+        y[i].residual_scale = GGML_FP32_TO_FP16(rscale);
+        y[i]._pad = 0;
+        for (int j = 0; j < nc; j++) {
+            y[i].residual_idx[j]  = ridx[j];
+            y[i].residual_vals[j] = (int8_t)roundf(rerr[j] / rscale);
+        }
+        for (int j = nc; j < Q4_K_LITE_MAX_RESIDUALS; j++) {
+            y[i].residual_idx[j] = 0; y[i].residual_vals[j] = 0;
+        }
+    }
+}
+
+void dequantize_row_q4_k_lite(const block_q4_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q3_K((const block_q3_K *)&x[i], y + i * QK_K, QK_K);
+        int nc = (int)x[i].residual_count;
+        if (nc < 0 || nc > Q4_K_LITE_MAX_RESIDUALS) nc = Q4_K_LITE_MAX_RESIDUALS;
+        float rscale = GGML_FP16_TO_FP32(x[i].residual_scale);
+        for (int j = 0; j < nc; j++)
+            y[i * QK_K + x[i].residual_idx[j]] += rscale * ((float)x[i].residual_vals[j] / 127.0f);
+    }
+}
+
+size_t quantize_q4_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                           int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++)
+        quantize_row_q4_k_lite_ref(src + row * n_per_row, (block_q4_k_lite *)dst + row * nb, n_per_row);
+    return (size_t)nrows * (size_t)nb * sizeof(block_q4_k_lite);
+}
+
+// Q5_K_LITE  (Q4_K base)
+void quantize_row_q5_k_lite_ref(const float * GGML_RESTRICT x, block_q5_k_lite * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float decoded[QK_K], err[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+        quantize_row_q4_K_ref(src, (block_q4_K *)&y[i], QK_K);
+        dequantize_row_q4_K((const block_q4_K *)&y[i], decoded, QK_K);
+        for (int j = 0; j < QK_K; j++) err[j] = src[j] - decoded[j];
+
+        uint8_t ridx[Q5_K_LITE_MAX_RESIDUALS];
+        float   rerr[Q5_K_LITE_MAX_RESIDUALS];
+        int nc = hifi_select_residuals(err, QK_K, Q5_K_LITE_MAX_RESIDUALS, NULL, ridx, rerr);
+
+        float max_err = 0.0f;
+        for (int j = 0; j < nc; j++) if (fabsf(rerr[j]) > max_err) max_err = fabsf(rerr[j]);
+        float rscale = (max_err > 0.0f) ? max_err / 127.0f : 1.0f;
+
+        y[i].residual_count = (uint8_t)nc;
+        y[i].residual_scale = GGML_FP32_TO_FP16(rscale);
+        y[i]._pad = 0;
+        for (int j = 0; j < nc; j++) {
+            y[i].residual_idx[j]  = ridx[j];
+            y[i].residual_vals[j] = (int8_t)roundf(rerr[j] / rscale);
+        }
+        for (int j = nc; j < Q5_K_LITE_MAX_RESIDUALS; j++) {
+            y[i].residual_idx[j] = 0; y[i].residual_vals[j] = 0;
+        }
+    }
+}
+
+void dequantize_row_q5_k_lite(const block_q5_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q4_K((const block_q4_K *)&x[i], y + i * QK_K, QK_K);
+        int nc = (int)x[i].residual_count;
+        if (nc < 0 || nc > Q5_K_LITE_MAX_RESIDUALS) nc = Q5_K_LITE_MAX_RESIDUALS;
+        float rscale = GGML_FP16_TO_FP32(x[i].residual_scale);
+        for (int j = 0; j < nc; j++)
+            y[i * QK_K + x[i].residual_idx[j]] += rscale * ((float)x[i].residual_vals[j] / 127.0f);
+    }
+}
+
+size_t quantize_q5_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                           int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++)
+        quantize_row_q5_k_lite_ref(src + row * n_per_row, (block_q5_k_lite *)dst + row * nb, n_per_row);
+    return (size_t)nrows * (size_t)nb * sizeof(block_q5_k_lite);
+}
+
+// Q6_K_LITE  (Q5_K base)
+void quantize_row_q6_k_lite_ref(const float * GGML_RESTRICT x, block_q6_k_lite * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    float decoded[QK_K], err[QK_K];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_K;
+        quantize_row_q5_K_ref(src, (block_q5_K *)&y[i], QK_K);
+        dequantize_row_q5_K((const block_q5_K *)&y[i], decoded, QK_K);
+        for (int j = 0; j < QK_K; j++) err[j] = src[j] - decoded[j];
+
+        uint8_t ridx[Q6_K_LITE_MAX_RESIDUALS];
+        float   rerr[Q6_K_LITE_MAX_RESIDUALS];
+        int nc = hifi_select_residuals(err, QK_K, Q6_K_LITE_MAX_RESIDUALS, NULL, ridx, rerr);
+
+        float max_err = 0.0f;
+        for (int j = 0; j < nc; j++) if (fabsf(rerr[j]) > max_err) max_err = fabsf(rerr[j]);
+        float rscale = (max_err > 0.0f) ? max_err / 127.0f : 1.0f;
+
+        y[i].residual_count = (uint8_t)nc;
+        y[i].residual_scale = GGML_FP32_TO_FP16(rscale);
+        y[i]._pad = 0;
+        for (int j = 0; j < nc; j++) {
+            y[i].residual_idx[j]  = ridx[j];
+            y[i].residual_vals[j] = (int8_t)roundf(rerr[j] / rscale);
+        }
+        for (int j = nc; j < Q6_K_LITE_MAX_RESIDUALS; j++) {
+            y[i].residual_idx[j] = 0; y[i].residual_vals[j] = 0;
+        }
+    }
+}
+
+void dequantize_row_q6_k_lite(const block_q6_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    for (int i = 0; i < nb; i++) {
+        dequantize_row_q5_K((const block_q5_K *)&x[i], y + i * QK_K, QK_K);
+        int nc = (int)x[i].residual_count;
+        if (nc < 0 || nc > Q6_K_LITE_MAX_RESIDUALS) nc = Q6_K_LITE_MAX_RESIDUALS;
+        float rscale = GGML_FP16_TO_FP32(x[i].residual_scale);
+        for (int j = 0; j < nc; j++)
+            y[i * QK_K + x[i].residual_idx[j]] += rscale * ((float)x[i].residual_vals[j] / 127.0f);
+    }
+}
+
+size_t quantize_q6_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                           int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    for (int64_t row = 0; row < nrows; row++)
+        quantize_row_q6_k_lite_ref(src + row * n_per_row, (block_q6_k_lite *)dst + row * nb, n_per_row);
+    return (size_t)nrows * (size_t)nb * sizeof(block_q6_k_lite);
 }
