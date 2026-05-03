@@ -554,6 +554,19 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
         int nc = (int)(blk[Q3_K_HIFI_GPU_COUNT_OFF]);
         if (nc > Q3_K_HIFI_GPU_MAX_OUT) nc = Q3_K_HIFI_GPU_MAX_OUT;
         dst_t * out = yy + i*QK_K;
+#ifdef GGML_HIFI_GPU_DEBUG
+        if (i == 0) {
+            printf("[Q3K_HIFI blk0] d_all=%f nc=%d sc0=%02x sc1=%02x qs0=%02x qs1=%02x hmask0=%02x\n",
+                   d_all, nc, sc[0], sc[1], qs[0], qs[1], hmask[0]);
+            printf("[Q3K_HIFI blk0] y[0]=%f y[1]=%f y[2]=%f y[3]=%f\n",
+                   (float)out[0], (float)out[1], (float)out[2], (float)out[3]);
+            for (int k = 0; k < nc; k++) {
+                printf("[Q3K_HIFI blk0] outlier[%d]: idx=%d val=%f\n",
+                       k, (int)idx_ptr[k],
+                       __half2float(*(const __half *)(val_raw + 2*k)));
+            }
+        }
+#endif
         for (int k = 0; k < nc; k++) {
             // Direct aligned load — val_raw+2k is always 2-byte aligned
             const float v = __half2float(*(const __half *)(val_raw + 2*k));
