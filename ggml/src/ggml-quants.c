@@ -5868,8 +5868,8 @@ void quantize_row_q2_k_hifi_ref(const float * GGML_RESTRICT x, block_q2_k_hifi *
         quantize_row_q2_K_ref(tmp, &base_tmp, QK_K);
         memcpy(y[i].scales, base_tmp.scales, sizeof(y[i].scales));
         memcpy(y[i].qs,     base_tmp.qs,     sizeof(y[i].qs));
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = base_tmp.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = base_tmp.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        y[i].d    = base_tmp.d;
+        y[i].dmin = base_tmp.dmin;
     }
 }
 
@@ -5882,8 +5882,8 @@ void dequantize_row_q2_k_hifi(const block_q2_k_hifi * GGML_RESTRICT x, float * G
         block_q2_K base_tmp;
         memcpy(base_tmp.scales, x[i].scales, sizeof(base_tmp.scales));
         memcpy(base_tmp.qs,     x[i].qs,     sizeof(base_tmp.qs));
-        base_tmp.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = x[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        base_tmp.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = x[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        base_tmp.d    = x[i].d;
+        base_tmp.dmin = x[i].dmin;
         dequantize_row_q2_K(&base_tmp, row, QK_K);
 
         int n_outliers = (int)(x[i].outlier_count & 0x7F);
@@ -6014,8 +6014,8 @@ void quantize_row_q5_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q5_k_h
         // 1. Quantize with Q5_K base
         block_q5_K base_tmp;
         quantize_row_q5_K_ref(row, &base_tmp, QK_K);
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = base_tmp.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        y[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = base_tmp.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        y[i].d    = base_tmp.d;
+        y[i].dmin = base_tmp.dmin;
         memcpy(y[i].scales, base_tmp.scales, sizeof(y[i].scales));
         memcpy(y[i].qh,     base_tmp.qh,     sizeof(y[i].qh));
         memcpy(y[i].qs,     base_tmp.qs,     sizeof(y[i].qs));
@@ -6065,8 +6065,8 @@ void dequantize_row_q5_k_hifi_res8(const block_q5_k_hifi_res8 * GGML_RESTRICT x,
     for (int i = 0; i < nb; i++) {
         float * row = y + i * QK_K;
         block_q5_K base_tmp;
-        base_tmp.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d    = x[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
-        base_tmp.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin = x[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+        base_tmp.d    = x[i].d;
+        base_tmp.dmin = x[i].dmin;
         memcpy(base_tmp.scales, x[i].scales, sizeof(base_tmp.scales));
         memcpy(base_tmp.qh,     x[i].qh,     sizeof(base_tmp.qh));
         memcpy(base_tmp.qs,     x[i].qs,     sizeof(base_tmp.qs));
