@@ -4950,12 +4950,13 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_NVFP4:
                     case GGML_TYPE_Q2_K:
                     case GGML_TYPE_Q3_K:
-                    // HIFI types forced to CPU: GPU dequant gives wrong results on ROCm (gfx1151).
-                    // Re-enable by adding GGML_TYPE_Q3_K_HIFI / Q4_K_HIFI / Q5_K_HIFI_RES8 / Q6_K_HIFI_RES8
-                    // and build with -DGGML_HIFI_GPU_DEBUG to capture debug output.
+                    case GGML_TYPE_Q3_K_HIFI:
                     case GGML_TYPE_Q4_K:
+                    case GGML_TYPE_Q4_K_HIFI:
                     case GGML_TYPE_Q5_K:
+                    case GGML_TYPE_Q5_K_HIFI_RES8:
                     case GGML_TYPE_Q6_K:
+                    case GGML_TYPE_Q6_K_HIFI_RES8:
                     case GGML_TYPE_Q8_K:
                     case GGML_TYPE_IQ1_M:
                     case GGML_TYPE_IQ1_S:
