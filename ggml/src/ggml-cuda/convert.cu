@@ -523,8 +523,8 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
     const uint8_t * hmask  = blk + Q3_K_OFF_HMASK;
     const uint8_t * qs     = blk + Q3_K_OFF_QS;
     const uint8_t * sc     = blk + Q3_K_OFF_SCALES;
-    __half d_raw;  memcpy(&d_raw, blk + Q3_K_OFF_D, sizeof(__half));
-    const float d_all = __half2float(d_raw);
+    // Direct aligned load — blk+108 is always 2-byte aligned (stride 136 is even)
+    const float d_all = __half2float(*(const __half *)(blk + Q3_K_OFF_D));
 
     // 64-thread Q3_K dequant (same algorithm as dequantize_block_q3_K):
     const int64_t r   = threadIdx.x/4;
@@ -555,8 +555,9 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
         if (nc > Q3_K_HIFI_GPU_MAX_OUT) nc = Q3_K_HIFI_GPU_MAX_OUT;
         dst_t * out = yy + i*QK_K;
         for (int k = 0; k < nc; k++) {
-            __half v;  memcpy(&v, val_raw + 2*k, sizeof(__half));
-            out[(int)idx_ptr[k]] = (dst_t)__half2float(v);
+            // Direct aligned load — val_raw+2k is always 2-byte aligned
+            const float v = __half2float(*(const __half *)(val_raw + 2*k));
+            out[(int)idx_ptr[k]] = (dst_t)v;
         }
     }
 }
@@ -587,8 +588,8 @@ static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, 
     const uint8_t * blk = (const uint8_t *)vx + i * Q4_K_HIFI_GPU_STRIDE;
 
     // block_q4_K byte offsets: dm[0..3], scales[4..15], qs[16..143]
-    half2 dm_raw;
-    memcpy(&dm_raw, blk + 0, sizeof(half2));
+    // Direct aligned load — blk+0 is 4-byte aligned (stride 168 = 8×21)
+    const half2 dm_raw = *(const half2 *)(blk + 0);
     const float dall = __half2float(__low2half(dm_raw));
     const float dmin = __half2float(__high2half(dm_raw));
     const uint8_t * scales_ptr = blk + 4;
@@ -617,8 +618,8 @@ static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, 
         const uint8_t * idx_ptr = blk + Q4_K_HIFI_GPU_IDX_OFF;
         dst_t * out = yy + i*QK_K;
         for (int k = 0; k < Q4_K_HIFI_GPU_MAX_OUT; k++) {
-            __half v;
-            memcpy(&v, blk + Q4_K_HIFI_GPU_VALS_OFF + 2*k, sizeof(__half));
+            // Direct aligned load — vals offset 152 + 2k is always 2-byte aligned
+            const __half v = *(const __half *)(blk + Q4_K_HIFI_GPU_VALS_OFF + 2*k);
             if (__half_as_ushort(v) == 0) break;  // FP16-zero sentinel
             out[(int)idx_ptr[k]] = (dst_t)__half2float(v);
         }
@@ -664,8 +665,8 @@ static __global__ void dequantize_block_q5_k_hifi_res8(const void * __restrict__
     const uint8_t * blk = (const uint8_t *)vx + i * Q5_K_HIFI_RES8_GPU_STRIDE;
 
     // block_q5_K byte offsets: dm[0..3], scales[4..15], qh[16..47], qs[48..175]
-    half2 dm_raw;
-    memcpy(&dm_raw, blk + 0, sizeof(half2));
+    // Direct aligned load — blk+0 is 4-byte aligned (stride 196 = 4×49)
+    const half2 dm_raw = *(const half2 *)(blk + 0);
     const float dall = __half2float(__low2half(dm_raw));
     const float dmin = __half2float(__high2half(dm_raw));
     const uint8_t * scales_ptr = blk + 4;
@@ -735,9 +736,8 @@ static __global__ void dequantize_block_q6_k_hifi_res8(const void * __restrict__
     const uint8_t * blk = (const uint8_t *)vx + i * Q6_K_HIFI_RES8_GPU_STRIDE;
 
     // block_q6_K byte offsets: ql[0..127], qh[128..191], scales[192..207], d[208..209]
-    __half d_raw;
-    memcpy(&d_raw, blk + 208, sizeof(__half));
-    const float d = __half2float(d_raw);
+    // Direct aligned load — blk+208 is 2-byte aligned (stride 232 = 8×29, 208 = 8×26)
+    const float d = __half2float(*(const __half *)(blk + 208));
     const uint8_t * ql_ptr = blk + 0;
     const uint8_t * qh_ptr = blk + 128;
     const int8_t  * sc_ptr = (const int8_t *)(blk + 192);
@@ -760,8 +760,8 @@ static __global__ void dequantize_block_q6_k_hifi_res8(const void * __restrict__
     if (threadIdx.x == 0) {
         int nc = (int)blk[Q6_K_HIFI_RES8_GPU_COUNT_OFF];
         if (nc > Q6_K_HIFI_RES8_GPU_MAX_RES) nc = Q6_K_HIFI_RES8_GPU_MAX_RES;
-        float rscale;
-        memcpy(&rscale, blk + Q6_K_HIFI_RES8_GPU_SCALE_OFF, sizeof(float));
+        // Direct aligned load — offset 228 = 4×57, stride 232 = 8×29: 4-byte aligned
+        const float rscale = *(const float *)(blk + Q6_K_HIFI_RES8_GPU_SCALE_OFF);
         dst_t * out = yy + i*QK_K;
         for (int k = 0; k < nc; k++) {
             const int pos = (int)blk[Q6_K_HIFI_RES8_GPU_IDX_OFF + k];
