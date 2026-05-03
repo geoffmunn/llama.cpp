@@ -1194,6 +1194,24 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
+            switch (op->src[0]->type) {
+                case GGML_TYPE_Q3_K_HIFI:
+                case GGML_TYPE_Q6_K_HIFI:
+                case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
+                case GGML_TYPE_Q6_K_HIFI_RES8:
+                case GGML_TYPE_Q5_K_HIFI_RES8:
+                case GGML_TYPE_Q3_K_HIFI_RES8:
+                case GGML_TYPE_Q4_K_HIFI:
+                case GGML_TYPE_Q2_K_HIFI:
+                case GGML_TYPE_Q2_K_LITE:
+                case GGML_TYPE_Q3_K_LITE:
+                case GGML_TYPE_Q4_K_LITE:
+                case GGML_TYPE_Q5_K_LITE:
+                case GGML_TYPE_Q6_K_LITE:
+                    return false; // no Metal kernels — fall back to CPU
+                default:
+                    break;
+            }
             return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
         case GGML_OP_SET:
         case GGML_OP_CPY:
@@ -1254,6 +1272,24 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 };
             }
         case GGML_OP_GET_ROWS:
+            switch (op->src[0]->type) {
+                case GGML_TYPE_Q3_K_HIFI:
+                case GGML_TYPE_Q6_K_HIFI:
+                case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
+                case GGML_TYPE_Q6_K_HIFI_RES8:
+                case GGML_TYPE_Q5_K_HIFI_RES8:
+                case GGML_TYPE_Q3_K_HIFI_RES8:
+                case GGML_TYPE_Q4_K_HIFI:
+                case GGML_TYPE_Q2_K_HIFI:
+                case GGML_TYPE_Q2_K_LITE:
+                case GGML_TYPE_Q3_K_LITE:
+                case GGML_TYPE_Q4_K_LITE:
+                case GGML_TYPE_Q5_K_LITE:
+                case GGML_TYPE_Q6_K_LITE:
+                    return false;
+                default:
+                    break;
+            }
             return op->src[0]->type != GGML_TYPE_NVFP4;
         case GGML_OP_SET_ROWS:
             {

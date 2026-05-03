@@ -68,6 +68,15 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:   return "IQ4_XS - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_S:    return "IQ3_S - 3.4375 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_M:    return "IQ3_S mix - 3.66 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q4_K_HIFI: return "Q4_K_HIFI - ~4.95 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q3_K_HIFI: return "Q3_K_HIFI - ~3.7 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q5_K_HIFI: return "Q5_K_HIFI - ~5.4 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q2_K_HIFI: return "Q2_K_HIFI - ~3.0 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q2_K_LITE: return "Q2_K_LITE - 3.0 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q3_K_LITE: return "Q3_K_LITE - 3.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q4_K_LITE: return "Q4_K_LITE - 4.0 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q5_K_LITE: return "Q5_K_LITE - 5.13 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q6_K_LITE: return "Q6_K_LITE - 6.13 bpw";
 
         default: return "unknown, may not work";
     }
@@ -759,7 +768,18 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_IQ4_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_XS;  break;
             case GGML_TYPE_IQ3_S:   ftype = LLAMA_FTYPE_MOSTLY_IQ3_S;   break;
             case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
-            case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
+            case GGML_TYPE_Q1_0:            ftype = LLAMA_FTYPE_MOSTLY_Q1_0;       break;
+            case GGML_TYPE_Q3_K_HIFI:       ftype = LLAMA_FTYPE_MOSTLY_Q3_K_HIFI;  break;
+            case GGML_TYPE_Q6_K_HIFI_DYNAMIC:ftype = LLAMA_FTYPE_MOSTLY_Q4_K_HIFI; break;
+            case GGML_TYPE_Q6_K_HIFI_RES8:  ftype = LLAMA_FTYPE_MOSTLY_Q4_K_HIFI;  break;
+            case GGML_TYPE_Q5_K_HIFI_RES8:  ftype = LLAMA_FTYPE_MOSTLY_Q4_K_HIFI;  break;
+            case GGML_TYPE_Q4_K_HIFI:       ftype = LLAMA_FTYPE_MOSTLY_Q4_K_HIFI;  break;
+            case GGML_TYPE_Q2_K_HIFI:       ftype = LLAMA_FTYPE_MOSTLY_Q2_K_HIFI;  break;
+            case GGML_TYPE_Q2_K_LITE:       ftype = LLAMA_FTYPE_MOSTLY_Q2_K_LITE;  break;
+            case GGML_TYPE_Q3_K_LITE:       ftype = LLAMA_FTYPE_MOSTLY_Q3_K_LITE;  break;
+            case GGML_TYPE_Q4_K_LITE:       ftype = LLAMA_FTYPE_MOSTLY_Q4_K_LITE;  break;
+            case GGML_TYPE_Q5_K_LITE:       ftype = LLAMA_FTYPE_MOSTLY_Q5_K_LITE;  break;
+            case GGML_TYPE_Q6_K_LITE:       ftype = LLAMA_FTYPE_MOSTLY_Q6_K_LITE;  break;
             default:
                 {
                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));

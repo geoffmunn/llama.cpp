@@ -69,6 +69,16 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "F16",      LLAMA_FTYPE_MOSTLY_F16,      "14.00G, +0.0020 ppl @ Mistral-7B",  },
     { "BF16",     LLAMA_FTYPE_MOSTLY_BF16,     "14.00G, -0.0050 ppl @ Mistral-7B",  },
     { "F32",      LLAMA_FTYPE_ALL_F32,         "26.00G              @ 7B",          },
+    // HIFI / LITE quantization families
+    { "Q2_K_HIFI", LLAMA_FTYPE_MOSTLY_Q2_K_HIFI, "~3.0 bpw Q2_K + INT8 residuals",               },
+    { "Q3_K_HIFI", LLAMA_FTYPE_MOSTLY_Q3_K_HIFI, "~3.7 bpw Q3_K_M + scale-aware FP16 outliers",  },
+    { "Q4_K_HIFI", LLAMA_FTYPE_MOSTLY_Q4_K_HIFI, "~4.95 bpw Q4_K + FP16 outliers, tiered",       },
+    { "Q5_K_HIFI", LLAMA_FTYPE_MOSTLY_Q5_K_HIFI, "~5.4 bpw Q5_K_M + Q6_K_HIFI_RES8 critical",   },
+    { "Q2_K_LITE", LLAMA_FTYPE_MOSTLY_Q2_K_LITE, "3.0 bpw Q2_K + INT8 residuals",                },
+    { "Q3_K_LITE", LLAMA_FTYPE_MOSTLY_Q3_K_LITE, "3.25 bpw Q2_K + INT8 residuals",               },
+    { "Q4_K_LITE", LLAMA_FTYPE_MOSTLY_Q4_K_LITE, "4.0 bpw Q3_K + INT8 residuals",                },
+    { "Q5_K_LITE", LLAMA_FTYPE_MOSTLY_Q5_K_LITE, "5.13 bpw Q4_K + INT8 residuals",               },
+    { "Q6_K_LITE", LLAMA_FTYPE_MOSTLY_Q6_K_LITE, "6.13 bpw Q5_K + INT8 residuals",               },
     // Note: Ensure COPY comes after F32 to avoid ftype 0 from matching.
     { "COPY",     LLAMA_FTYPE_ALL_F32,         "only copy tensors, no quantizing",  },
 };
