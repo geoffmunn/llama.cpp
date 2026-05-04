@@ -537,9 +537,13 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
             yb[idx] = (dst_t)__half2float(x[i].outliers[k]);
         }
         if (i == 0 && atomicAdd(&g_q3k_hifi_dbg_count, 1) < 2) {
-            printf("[Q3_K_HIFI GPU] d=%.6f nc=%d y[0]=%.4f y[1]=%.4f y[2]=%.4f y[3]=%.4f\n",
+            printf("[Q3_K_HIFI GPU] sizeof_blk=%d off_idx=%d off_outliers=%d off_count=%d d=%.6f nc=%d y[0]=%.4f y[1]=%.4f\n",
+                   (int)sizeof(block_q3_k_hifi),
+                   (int)__builtin_offsetof(block_q3_k_hifi, outlier_idx),
+                   (int)__builtin_offsetof(block_q3_k_hifi, outliers),
+                   (int)__builtin_offsetof(block_q3_k_hifi, outlier_count),
                    __half2float(q3k->d), (int)x[0].outlier_count,
-                   (float)yb[0], (float)yb[1], (float)yb[2], (float)yb[3]);
+                   (float)yb[0], (float)yb[1]);
         }
     }
 }
@@ -551,8 +555,11 @@ static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
     static bool first = true;
     if (first) {
         first = false;
-        fprintf(stderr, "[Q3_K_HIFI HOST] k=%lld nb=%d blk_bytes=%zu\n",
-                (long long)k, nb, sizeof(block_q3_k_hifi));
+        fprintf(stderr, "[Q3_K_HIFI HOST] k=%lld nb=%d sizeof_blk=%zu off_idx=%zu off_outliers=%zu off_count=%zu\n",
+                (long long)k, nb, sizeof(block_q3_k_hifi),
+                offsetof(block_q3_k_hifi, outlier_idx),
+                offsetof(block_q3_k_hifi, outliers),
+                offsetof(block_q3_k_hifi, outlier_count));
     }
     dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
 }
