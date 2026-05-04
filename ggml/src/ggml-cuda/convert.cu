@@ -487,9 +487,9 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
 }
 
 // ============================================================
-// HIFI quantization CUDA dequantization kernels
-// These access block fields via raw byte offsets because the
-// HIFI block types are not visible inside the CUDA TU.
+// HIFI quantization CUDA/HIP dequantization kernels
+// Uses direct struct access — matching the reference implementation
+// in the master branch which is confirmed to work on ROCm gfx1151.
 // ============================================================
 
 // ------------------------------------------------------------------
@@ -501,42 +501,12 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
 //  [134]     = outlier_count  (uint8_t)
 //  [135]     = _pad
 // ------------------------------------------------------------------
-static constexpr int Q3_K_HIFI_GPU_STRIDE    = 136;
-static constexpr int Q3_K_HIFI_GPU_IDX_OFF   = 110;
-static constexpr int Q3_K_HIFI_GPU_VALS_OFF  = 118;
-static constexpr int Q3_K_HIFI_GPU_COUNT_OFF = 134;
-static constexpr int Q3_K_HIFI_GPU_MAX_OUT   = 8;
-
-// Q3_K block field offsets (no struct cast — explicit byte offsets, immune to layout issues):
-// hmask[32]  at [0..31], qs[64] at [32..95], scales[12] at [96..107], d(fp16) at [108..109]
-static constexpr int Q3_K_OFF_HMASK  =   0;
-static constexpr int Q3_K_OFF_QS     =  32;
-static constexpr int Q3_K_OFF_SCALES =  96;
-static constexpr int Q3_K_OFF_D      = 108;
-
 template<typename dst_t>
 static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
     const int64_t i = blockIdx.x;
+    const block_q3_k_hifi * x = (const block_q3_k_hifi *) vx;
+    const block_q3_K * q3k = (const block_q3_K *)x[i].q3_k_data;
 
-    // Stage the entire HIFI block (136 bytes) into shared memory via byte-by-byte cooperative
-    // copy.  This avoids any global-memory type-punning that some ROCm compiler versions may
-    // handle incorrectly, while keeping the same dequant algorithm.
-    __shared__ uint8_t smem[Q3_K_HIFI_GPU_STRIDE];
-    const uint8_t * gblk = (const uint8_t *)vx + i * Q3_K_HIFI_GPU_STRIDE;
-    for (int t = threadIdx.x; t < Q3_K_HIFI_GPU_STRIDE; t += blockDim.x) {
-        smem[t] = gblk[t];
-    }
-    __syncthreads();
-
-    // All reads below are from shared memory:
-    const uint8_t * hmask = smem + Q3_K_OFF_HMASK;   // smem[0..31]
-    const uint8_t * qs    = smem + Q3_K_OFF_QS;      // smem[32..95]
-    const uint8_t * sc    = smem + Q3_K_OFF_SCALES;  // smem[96..107]
-    // Read FP16 scale byte-by-byte → __ushort_as_half: zero aliasing ambiguity
-    const uint16_t d_bits = (uint16_t)smem[Q3_K_OFF_D] | ((uint16_t)smem[Q3_K_OFF_D+1] << 8);
-    const float d_all = __half2float(__ushort_as_half(d_bits));
-
-    // 64-thread Q3_K dequant (identical algorithm to dequantize_block_q3_K):
     const int64_t r   = threadIdx.x/4;
     const int64_t tid = r/2;
     const int64_t is0 = r%2;
@@ -546,37 +516,32 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
     uint8_t m  = 1 << (4*n + j);
     int64_t is = 8*n + 2*j + is0;
     int shift  = 2*j;
-    int8_t us = is <  4 ? (sc[is] & 0xF) | (((sc[is+8] >> 0) & 3) << 4) :
-                is <  8 ? (sc[is] & 0xF) | (((sc[is+4] >> 2) & 3) << 4) :
-                is < 12 ? (sc[is-8] >> 4) | (((sc[is+0] >> 4) & 3) << 4) :
-                          (sc[is-8] >> 4) | (((sc[is-4] >> 6) & 3) << 4);
-    const float dl = d_all * (us - 32);
+
+    int8_t us = is <  4 ? (q3k->scales[is-0] & 0xF) | (((q3k->scales[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (q3k->scales[is-0] & 0xF) | (((q3k->scales[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (q3k->scales[is-8] >>  4) | (((q3k->scales[is+0] >> 4) & 3) << 4) :
+                          (q3k->scales[is-8] >>  4) | (((q3k->scales[is-4] >> 6) & 3) << 4);
+    const float d_all = __half2float(q3k->d);
+    const float dl    = d_all * (us - 32);
+
     dst_t * y         = yy + i*QK_K + 128*n + 32*j;
-    const uint8_t * q = qs + 32*n;
+    const uint8_t * q = q3k->qs + 32*n;
+    const uint8_t * hm = q3k->hmask;
     for (int l = l0; l < l0+4; ++l) {
-        y[l] = (dst_t)(dl * ((int8_t)((q[l] >> shift) & 3) - ((hmask[l] & m) ? 0 : 4)));
+        y[l] = (dst_t)(dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4)));
     }
 
     __syncthreads();
     if (threadIdx.x == 0) {
-        const uint8_t * idx_ptr = smem + Q3_K_HIFI_GPU_IDX_OFF;
-        const uint8_t * val_raw = smem + Q3_K_HIFI_GPU_VALS_OFF;
-        int nc = (int)(smem[Q3_K_HIFI_GPU_COUNT_OFF]);
-        if (nc > Q3_K_HIFI_GPU_MAX_OUT) nc = Q3_K_HIFI_GPU_MAX_OUT;
-        dst_t * out = yy + i*QK_K;
-#ifdef GGML_HIFI_GPU_DEBUG
-        if (i == 0) {
-            printf("[Q3K_HIFI blk0 smem] d_all=%f nc=%d sc0=%02x sc1=%02x qs0=%02x hmask0=%02x\n",
-                   d_all, nc, sc[0], sc[1], qs[0], hmask[0]);
-            printf("[Q3K_HIFI blk0 smem] y[0]=%f y[1]=%f y[2]=%f y[3]=%f\n",
-                   (float)out[0], (float)out[1], (float)out[2], (float)out[3]);
-        }
+        dst_t * yb = yy + i*QK_K;
+        int nc = (int)x[i].outlier_count;
+        if (nc > Q3_K_HIFI_OUTLIERS) nc = Q3_K_HIFI_OUTLIERS;
+#ifdef GGML_HIFI_NO_OUTLIERS
+        nc = 0;
 #endif
         for (int k = 0; k < nc; k++) {
-            // Read FP16 outlier byte-by-byte to avoid aliasing issues:
-            const uint16_t v_bits = (uint16_t)val_raw[2*k] | ((uint16_t)val_raw[2*k+1] << 8);
-            const float v = __half2float(__ushort_as_half(v_bits));
-            out[(int)idx_ptr[k]] = (dst_t)v;
+            const int idx = (int)x[i].outlier_idx[k];
+            yb[idx] = (dst_t)__half2float(x[i].outliers[k]);
         }
     }
 }
@@ -590,50 +555,26 @@ static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
 
 // ------------------------------------------------------------------
 // Q4_K_HIFI (168 bytes per block, 32 threads)
-// Byte layout:
-//  [0..143]  = q4_k_data (144-byte block_q4_K)
-//  [144..151]= outlier_idx[8] (uint8_t x8)
-//  [152..167]= outliers[8]    (__half x8 = 16 bytes)
-// No outlier_count — use FP16-zero sentinel
 // ------------------------------------------------------------------
-static constexpr int Q4_K_HIFI_GPU_STRIDE   = 168;
-static constexpr int Q4_K_HIFI_GPU_IDX_OFF  = 144;
-static constexpr int Q4_K_HIFI_GPU_VALS_OFF = 152;
-static constexpr int Q4_K_HIFI_GPU_MAX_OUT  = 8;
-
 template<typename dst_t>
 static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const block_q4_k_hifi * x = (const block_q4_k_hifi *) vx;
     const int64_t i = blockIdx.x;
+    const block_q4_K * q4k = (const block_q4_K *)x[i].q4_k_data;
 
-    // Stage block in shared memory — avoids global-memory type-punning issues on ROCm.
-    __shared__ uint8_t smem[Q4_K_HIFI_GPU_STRIDE];
-    const uint8_t * gblk = (const uint8_t *)vx + i * Q4_K_HIFI_GPU_STRIDE;
-    for (int t = threadIdx.x; t < Q4_K_HIFI_GPU_STRIDE; t += blockDim.x) {
-        smem[t] = gblk[t];
-    }
-    __syncthreads();
-
-    // block_q4_K byte offsets: dm[0..3], scales[4..15], qs[16..143]
-    // Read FP16 dall/dmin byte-by-byte from shared memory:
-    const uint16_t dall_bits = (uint16_t)smem[0] | ((uint16_t)smem[1] << 8);
-    const uint16_t dmin_bits = (uint16_t)smem[2] | ((uint16_t)smem[3] << 8);
-    const float dall = __half2float(__ushort_as_half(dall_bits));
-    const float dmin = __half2float(__ushort_as_half(dmin_bits));
-    const uint8_t * scales_ptr = smem + 4;
-    const uint8_t * qs_ptr     = smem + 16;
-
-    // 32-thread Q4_K dequant (identical to dequantize_block_q4_K):
     const int64_t tid = threadIdx.x;
     const int64_t il  = tid/8;
     const int64_t ir  = tid%8;
     const int64_t is  = 2*il;
     const int64_t n   = 4;
     dst_t * y = yy + i*QK_K + 64*il + n*ir;
-    const uint8_t * q = qs_ptr + 32*il + n*ir;
+    const float dall = __low2half(q4k->dm);
+    const float dmin = __high2half(q4k->dm);
+    const uint8_t * q = q4k->qs + 32*il + n*ir;
     uint8_t sc, m;
-    get_scale_min_k4(is + 0, scales_ptr, sc, m);
+    get_scale_min_k4(is + 0, q4k->scales, sc, m);
     const float d1 = dall * sc; const float m1 = dmin * m;
-    get_scale_min_k4(is + 1, scales_ptr, sc, m);
+    get_scale_min_k4(is + 1, q4k->scales, sc, m);
     const float d2 = dall * sc; const float m2 = dmin * m;
     for (int l = 0; l < n; ++l) {
         y[l +  0] = (dst_t)(d1 * (q[l] & 0xF) - m1);
@@ -642,15 +583,16 @@ static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, 
 
     __syncthreads();
     if (threadIdx.x == 0) {
-        const uint8_t * idx_ptr = smem + Q4_K_HIFI_GPU_IDX_OFF;
-        dst_t * out = yy + i*QK_K;
-        for (int k = 0; k < Q4_K_HIFI_GPU_MAX_OUT; k++) {
-            // Read FP16 outlier byte-by-byte; FP16-zero sentinel check via raw bits:
-            const uint16_t v_bits = (uint16_t)smem[Q4_K_HIFI_GPU_VALS_OFF + 2*k]
-                                  | ((uint16_t)smem[Q4_K_HIFI_GPU_VALS_OFF + 2*k + 1] << 8);
-            if (v_bits == 0) break;  // FP16-zero sentinel
-            out[(int)idx_ptr[k]] = (dst_t)__half2float(__ushort_as_half(v_bits));
+        dst_t * yb = yy + i*QK_K;
+#ifndef GGML_HIFI_NO_OUTLIERS
+        for (int k = 0; k < Q4_K_HIFI_OUTLIERS; k++) {
+            const int idx = (int)x[i].outlier_idx[k];
+            if (idx >= Q4_K_HIFI_BLOCK_SIZE) break;
+            const float v = __half2float(x[i].outliers[k]);
+            if (v == 0.0f) break;  // FP16-zero sentinel
+            yb[idx] = (dst_t)v;
         }
+#endif
     }
 }
 
@@ -663,13 +605,6 @@ static void dequantize_row_q4_k_hifi_cuda(const void * vx, dst_t * y,
 
 // ------------------------------------------------------------------
 // E4M3 device helper + Q5_K_HIFI_RES8 kernel (196 bytes, 64 threads)
-// Byte layout:
-//  [0..175]  = Q5_K base (176 bytes)
-//  [176]     = outlier_count (uint8_t)
-//  [177..184]= outlier_idx[8] (uint8_t x8)
-//  [185..192]= residual_vals[8] (int8_t x8)
-//  [193]     = residual_scale_e4m3 (uint8_t)
-//  [194..195]= _reserved
 // ------------------------------------------------------------------
 __device__ static float e4m3fn_to_float_cuda(uint8_t b) {
     if ((b & 0x7F) == 0x7F) return 0.0f;  // NaN -> 0
@@ -680,46 +615,24 @@ __device__ static float e4m3fn_to_float_cuda(uint8_t b) {
     return s ? -v : v;
 }
 
-static constexpr int Q5_K_HIFI_RES8_GPU_STRIDE    = 196;
-static constexpr int Q5_K_HIFI_RES8_GPU_COUNT_OFF = 176;
-static constexpr int Q5_K_HIFI_RES8_GPU_IDX_OFF   = 177;
-static constexpr int Q5_K_HIFI_RES8_GPU_VALS_OFF  = 185;
-static constexpr int Q5_K_HIFI_RES8_GPU_E4M3_OFF  = 193;
-static constexpr int Q5_K_HIFI_RES8_GPU_MAX_RES   = 8;
-
 template<typename dst_t>
 static __global__ void dequantize_block_q5_k_hifi_res8(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const block_q5_k_hifi_res8 * x = (const block_q5_k_hifi_res8 *) vx;
     const int64_t i = blockIdx.x;
-
-    // Stage block in shared memory — avoids global-memory type-punning issues on ROCm.
-    __shared__ uint8_t smem[Q5_K_HIFI_RES8_GPU_STRIDE];
-    const uint8_t * gblk = (const uint8_t *)vx + i * Q5_K_HIFI_RES8_GPU_STRIDE;
-    for (int t = threadIdx.x; t < Q5_K_HIFI_RES8_GPU_STRIDE; t += blockDim.x) {
-        smem[t] = gblk[t];
-    }
-    __syncthreads();
-
-    // block_q5_K byte offsets: dm[0..3], scales[4..15], qh[16..47], qs[48..175]
-    // Read FP16 dall/dmin byte-by-byte from shared memory:
-    const uint16_t dall_bits = (uint16_t)smem[0] | ((uint16_t)smem[1] << 8);
-    const uint16_t dmin_bits = (uint16_t)smem[2] | ((uint16_t)smem[3] << 8);
-    const float dall = __half2float(__ushort_as_half(dall_bits));
-    const float dmin = __half2float(__ushort_as_half(dmin_bits));
-    const uint8_t * scales_ptr = smem + 4;
-    const uint8_t * qh_ptr     = smem + 16;
-    const uint8_t * qs_ptr     = smem + 48;
 
     const int64_t tid = threadIdx.x;
     const int64_t il  = tid/16;
     const int64_t ir  = tid%16;
     const int64_t is  = 2*il;
     dst_t * y = yy + i*QK_K + 64*il + 2*ir;
-    const uint8_t * ql = qs_ptr + 32*il + 2*ir;
-    const uint8_t * qh = qh_ptr + 2*ir;
+    const float dall = __low2half(x[i].dm);
+    const float dmin = __high2half(x[i].dm);
+    const uint8_t * ql = x[i].qs + 32*il + 2*ir;
+    const uint8_t * qh = x[i].qh + 2*ir;
     uint8_t sc, m;
-    get_scale_min_k4(is + 0, scales_ptr, sc, m);
+    get_scale_min_k4(is + 0, x[i].scales, sc, m);
     const float d1 = dall * sc; const float m1 = dmin * m;
-    get_scale_min_k4(is + 1, scales_ptr, sc, m);
+    get_scale_min_k4(is + 1, x[i].scales, sc, m);
     const float d2 = dall * sc; const float m2 = dmin * m;
     uint8_t hm = 1 << (2*il);
     y[ 0] = (dst_t)(d1 * ((ql[ 0] & 0xF) + (qh[ 0] & hm ? 16 : 0)) - m1);
@@ -730,14 +643,16 @@ static __global__ void dequantize_block_q5_k_hifi_res8(const void * __restrict__
 
     __syncthreads();
     if (threadIdx.x == 0) {
-        int nc = (int)smem[Q5_K_HIFI_RES8_GPU_COUNT_OFF];
-        if (nc > Q5_K_HIFI_RES8_GPU_MAX_RES) nc = Q5_K_HIFI_RES8_GPU_MAX_RES;
-        const float rscale = e4m3fn_to_float_cuda(smem[Q5_K_HIFI_RES8_GPU_E4M3_OFF]);
+        int nc = (int)x[i].outlier_count;
+        if (nc > Q5_K_HIFI_RES8_MAX_OUTLIERS) nc = Q5_K_HIFI_RES8_MAX_OUTLIERS;
+#ifdef GGML_HIFI_NO_OUTLIERS
+        nc = 0;
+#endif
+        const float rscale = e4m3fn_to_float_cuda(x[i].residual_scale_e4m3);
         dst_t * out = yy + i*QK_K;
         for (int k = 0; k < nc; k++) {
-            const int pos = (int)smem[Q5_K_HIFI_RES8_GPU_IDX_OFF + k];
-            out[pos] = (dst_t)((float)out[pos] +
-                               (float)(int8_t)smem[Q5_K_HIFI_RES8_GPU_VALS_OFF + k] * rscale);
+            const int pos = (int)x[i].outlier_idx[k];
+            out[pos] = (dst_t)((float)out[pos] + (float)x[i].residual_vals[k] * rscale);
         }
     }
 }
@@ -751,70 +666,40 @@ static void dequantize_row_q5_k_hifi_res8_cuda(const void * vx, dst_t * y,
 
 // ------------------------------------------------------------------
 // Q6_K_HIFI_RES8 kernel (232 bytes, 64 threads)
-// Byte layout:
-//  [0..209]  = Q6_K base (210 bytes): ql[128]+qh[64]+scales[16]+d[2]
-//  [210]     = outlier_count (uint8_t)
-//  [211..218]= outlier_idx[8] (uint8_t x8)
-//  [219..226]= residual_vals[8] (int8_t x8)
-//  [227]     = _padding
-//  [228..231]= residual_scale (float)
 // ------------------------------------------------------------------
-static constexpr int Q6_K_HIFI_RES8_GPU_STRIDE    = 232;
-static constexpr int Q6_K_HIFI_RES8_GPU_COUNT_OFF = 210;
-static constexpr int Q6_K_HIFI_RES8_GPU_IDX_OFF   = 211;
-static constexpr int Q6_K_HIFI_RES8_GPU_VALS_OFF  = 219;
-static constexpr int Q6_K_HIFI_RES8_GPU_SCALE_OFF = 228;
-static constexpr int Q6_K_HIFI_RES8_GPU_MAX_RES   = 8;
-
 template<typename dst_t>
 static __global__ void dequantize_block_q6_k_hifi_res8(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const block_q6_k_hifi_res8 * x = (const block_q6_k_hifi_res8 *) vx;
     const int64_t i = blockIdx.x;
-
-    // Stage block in shared memory — avoids global-memory type-punning issues on ROCm.
-    __shared__ uint8_t smem[Q6_K_HIFI_RES8_GPU_STRIDE];
-    const uint8_t * gblk = (const uint8_t *)vx + i * Q6_K_HIFI_RES8_GPU_STRIDE;
-    for (int t = threadIdx.x; t < Q6_K_HIFI_RES8_GPU_STRIDE; t += blockDim.x) {
-        smem[t] = gblk[t];
-    }
-    __syncthreads();
-
-    // block_q6_K byte offsets: ql[0..127], qh[128..191], scales[192..207], d[208..209]
-    // Read FP16 d byte-by-byte from shared memory:
-    const uint16_t d_bits = (uint16_t)smem[208] | ((uint16_t)smem[209] << 8);
-    const float d = __half2float(__ushort_as_half(d_bits));
-    const uint8_t * ql_ptr = smem + 0;
-    const uint8_t * qh_ptr = smem + 128;
-    const int8_t  * sc_ptr = (const int8_t *)(smem + 192);  // int8_t* from smem: well-defined
 
     const int64_t tid  = threadIdx.x;
     const int64_t ip   = tid/32;
     const int64_t il   = tid - 32*ip;
     const int64_t is   = 8*ip + il/16;
     dst_t * y = yy + i*QK_K + 128*ip + il;
-    const uint8_t * ql = ql_ptr + 64*ip + il;
-    const uint8_t * qh = qh_ptr + 32*ip + il;
-    const int8_t  * sc = sc_ptr + is;
+    const float d = __half2float(x[i].d);
+    const uint8_t * ql = x[i].ql + 64*ip + il;
+    const uint8_t   qh = x[i].qh[32*ip + il];
+    const int8_t  * sc = x[i].scales + is;
 
-    y[ 0] = (dst_t)(d * sc[0] * ((int8_t)((ql[ 0] & 0xF) | (((qh[ 0] >> 0) & 3) << 4)) - 32));
-    y[32] = (dst_t)(d * sc[2] * ((int8_t)((ql[32] & 0xF) | (((qh[ 0] >> 2) & 3) << 4)) - 32));
-    y[64] = (dst_t)(d * sc[4] * ((int8_t)((ql[ 0]  >> 4) | (((qh[ 0] >> 4) & 3) << 4)) - 32));
-    y[96] = (dst_t)(d * sc[6] * ((int8_t)((ql[32]  >> 4) | (((qh[ 0] >> 6) & 3) << 4)) - 32));
+    y[ 0] = (dst_t)(d * sc[0] * ((int8_t)((ql[ 0] & 0xF) | (((qh >> 0) & 3) << 4)) - 32));
+    y[32] = (dst_t)(d * sc[2] * ((int8_t)((ql[32] & 0xF) | (((qh >> 2) & 3) << 4)) - 32));
+    y[64] = (dst_t)(d * sc[4] * ((int8_t)((ql[ 0]  >> 4) | (((qh >> 4) & 3) << 4)) - 32));
+    y[96] = (dst_t)(d * sc[6] * ((int8_t)((ql[32]  >> 4) | (((qh >> 6) & 3) << 4)) - 32));
 
     __syncthreads();
     if (threadIdx.x == 0) {
-        int nc = (int)smem[Q6_K_HIFI_RES8_GPU_COUNT_OFF];
-        if (nc > Q6_K_HIFI_RES8_GPU_MAX_RES) nc = Q6_K_HIFI_RES8_GPU_MAX_RES;
-        // Read float rscale byte-by-byte → __uint_as_float: zero aliasing ambiguity
-        const uint32_t rs_bits = (uint32_t)smem[Q6_K_HIFI_RES8_GPU_SCALE_OFF    ]
-                               | ((uint32_t)smem[Q6_K_HIFI_RES8_GPU_SCALE_OFF + 1] << 8)
-                               | ((uint32_t)smem[Q6_K_HIFI_RES8_GPU_SCALE_OFF + 2] << 16)
-                               | ((uint32_t)smem[Q6_K_HIFI_RES8_GPU_SCALE_OFF + 3] << 24);
-        const float rscale = __uint_as_float(rs_bits);
+        int nc = (int)x[i].outlier_count;
+        if (nc > Q6_K_HIFI_RES8_MAX_OUTLIERS) nc = Q6_K_HIFI_RES8_MAX_OUTLIERS;
+#ifdef GGML_HIFI_NO_OUTLIERS
+        nc = 0;
+#endif
+        const float rscale = x[i].residual_scale;
         dst_t * out = yy + i*QK_K;
         for (int k = 0; k < nc; k++) {
-            const int pos = (int)smem[Q6_K_HIFI_RES8_GPU_IDX_OFF + k];
+            const int pos = (int)x[i].outlier_idx[k];
             out[pos] = (dst_t)((float)out[pos] +
-                               rscale * ((float)(int8_t)smem[Q6_K_HIFI_RES8_GPU_VALS_OFF + k] / 127.0f));
+                               rscale * ((float)x[i].residual_vals[k] / 127.0f));
         }
     }
 }
