@@ -490,8 +490,9 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
 // HIFI quantization CUDA/HIP dequantization kernels
 // ============================================================
 
-// Debug-only: fires once to confirm kernel is reached and values are sane
-static __device__ int g_q3k_hifi_dbg_count = 0;
+// Debug-only: fires once per block index to check inter-block stride
+static __device__ int g_q3k_dbg_blk0 = 0;
+static __device__ int g_q3k_dbg_blk1 = 0;
 
 // ------------------------------------------------------------------
 // Q3_K_HIFI: Q3_K bulk dequant + FP16 outlier replacements
@@ -536,14 +537,17 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
             const int idx = (int)x[i].outlier_idx[k];
             yb[idx] = (dst_t)__half2float(x[i].outliers[k]);
         }
-        if (i == 0 && atomicAdd(&g_q3k_hifi_dbg_count, 1) < 2) {
-            printf("[Q3_K_HIFI GPU] sizeof_blk=%d off_idx=%d off_outliers=%d off_count=%d d=%.6f nc=%d y[0]=%.4f y[1]=%.4f\n",
+        if (i == 0 && atomicAdd(&g_q3k_dbg_blk0, 1) < 2) {
+            printf("[Q3_K_HIFI BLK0] sizeof=%d d=%.6f nc=%d y[0]=%.4f y[1]=%.4f y[4]=%.4f y[5]=%.4f\n",
                    (int)sizeof(block_q3_k_hifi),
-                   (int)__builtin_offsetof(block_q3_k_hifi, outlier_idx),
-                   (int)__builtin_offsetof(block_q3_k_hifi, outliers),
-                   (int)__builtin_offsetof(block_q3_k_hifi, outlier_count),
                    __half2float(q3k->d), (int)x[0].outlier_count,
-                   (float)yb[0], (float)yb[1]);
+                   (float)yb[0], (float)yb[1], (float)yb[4], (float)yb[5]);
+        }
+        if (i == 1 && atomicAdd(&g_q3k_dbg_blk1, 1) < 1) {
+            printf("[Q3_K_HIFI BLK1] sizeof=%d d=%.6f nc=%d y[256]=%.4f y[257]=%.4f y[260]=%.4f y[261]=%.4f\n",
+                   (int)sizeof(block_q3_k_hifi),
+                   __half2float(q3k->d), (int)x[1].outlier_count,
+                   (float)yb[0], (float)yb[1], (float)yb[4], (float)yb[5]);
         }
     }
 }
@@ -552,14 +556,9 @@ template<typename dst_t>
 static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
                                            const int64_t k, cudaStream_t stream) {
     const int nb = k / QK_K;
-    static bool first = true;
-    if (first) {
-        first = false;
-        fprintf(stderr, "[Q3_K_HIFI HOST] k=%lld nb=%d sizeof_blk=%zu off_idx=%zu off_outliers=%zu off_count=%zu\n",
-                (long long)k, nb, sizeof(block_q3_k_hifi),
-                offsetof(block_q3_k_hifi, outlier_idx),
-                offsetof(block_q3_k_hifi, outliers),
-                offsetof(block_q3_k_hifi, outlier_count));
+    static int call_count = 0;
+    if (call_count++ < 10) {
+        fprintf(stderr, "[Q3_K_HIFI HOST call %d] k=%lld nb=%d\n", call_count, (long long)k, nb);
     }
     dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
 }
