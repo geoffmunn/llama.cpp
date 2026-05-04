@@ -488,18 +488,11 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
 
 // ============================================================
 // HIFI quantization CUDA/HIP dequantization kernels
-// Uses direct struct access — matching the reference implementation
-// in the master branch which is confirmed to work on ROCm gfx1151.
 // ============================================================
 
 // ------------------------------------------------------------------
-// Q3_K_HIFI (136 bytes per block, 64 threads)
-// Byte layout:
-//  [0..109]  = q3_k_data (110-byte block_q3_K)
-//  [110..117]= outlier_idx[8] (uint8_t x8)
-//  [118..133]= outliers[8]    (__half x8 = 16 bytes)
-//  [134]     = outlier_count  (uint8_t)
-//  [135]     = _pad
+// Q3_K_HIFI: Q3_K bulk dequant + FP16 outlier replacements
+// 136 bytes per block, 64 threads
 // ------------------------------------------------------------------
 template<typename dst_t>
 static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
@@ -536,9 +529,6 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
         dst_t * yb = yy + i*QK_K;
         int nc = (int)x[i].outlier_count;
         if (nc > Q3_K_HIFI_OUTLIERS) nc = Q3_K_HIFI_OUTLIERS;
-#ifdef GGML_HIFI_NO_OUTLIERS
-        nc = 0;
-#endif
         for (int k = 0; k < nc; k++) {
             const int idx = (int)x[i].outlier_idx[k];
             yb[idx] = (dst_t)__half2float(x[i].outliers[k]);
@@ -554,12 +544,13 @@ static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
 }
 
 // ------------------------------------------------------------------
-// Q4_K_HIFI (168 bytes per block, 32 threads)
+// Q4_K_HIFI: Q4_K bulk dequant + FP16 outlier replacements
+// 168 bytes per block, 32 threads
 // ------------------------------------------------------------------
 template<typename dst_t>
 static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
     const block_q4_k_hifi * x = (const block_q4_k_hifi *) vx;
-    const int64_t i = blockIdx.x;
+    const int64_t i  = blockIdx.x;
     const block_q4_K * q4k = (const block_q4_K *)x[i].q4_k_data;
 
     const int64_t tid = threadIdx.x;
@@ -584,15 +575,13 @@ static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, 
     __syncthreads();
     if (threadIdx.x == 0) {
         dst_t * yb = yy + i*QK_K;
-#ifndef GGML_HIFI_NO_OUTLIERS
         for (int k = 0; k < Q4_K_HIFI_OUTLIERS; k++) {
             const int idx = (int)x[i].outlier_idx[k];
             if (idx >= Q4_K_HIFI_BLOCK_SIZE) break;
             const float v = __half2float(x[i].outliers[k]);
-            if (v == 0.0f) break;  // FP16-zero sentinel
+            if (v == 0.0f) break;
             yb[idx] = (dst_t)v;
         }
-#endif
     }
 }
 
@@ -604,7 +593,8 @@ static void dequantize_row_q4_k_hifi_cuda(const void * vx, dst_t * y,
 }
 
 // ------------------------------------------------------------------
-// E4M3 device helper + Q5_K_HIFI_RES8 kernel (196 bytes, 64 threads)
+// E4M3 FP8 helper + Q5_K_HIFI_RES8: Q5_K bulk + INT8 residuals
+// 196 bytes per block, 64 threads
 // ------------------------------------------------------------------
 __device__ static float e4m3fn_to_float_cuda(uint8_t b) {
     if ((b & 0x7F) == 0x7F) return 0.0f;  // NaN -> 0
@@ -618,8 +608,7 @@ __device__ static float e4m3fn_to_float_cuda(uint8_t b) {
 template<typename dst_t>
 static __global__ void dequantize_block_q5_k_hifi_res8(const void * __restrict__ vx, dst_t * __restrict__ yy) {
     const block_q5_k_hifi_res8 * x = (const block_q5_k_hifi_res8 *) vx;
-    const int64_t i = blockIdx.x;
-
+    const int64_t i  = blockIdx.x;
     const int64_t tid = threadIdx.x;
     const int64_t il  = tid/16;
     const int64_t ir  = tid%16;
@@ -645,9 +634,6 @@ static __global__ void dequantize_block_q5_k_hifi_res8(const void * __restrict__
     if (threadIdx.x == 0) {
         int nc = (int)x[i].outlier_count;
         if (nc > Q5_K_HIFI_RES8_MAX_OUTLIERS) nc = Q5_K_HIFI_RES8_MAX_OUTLIERS;
-#ifdef GGML_HIFI_NO_OUTLIERS
-        nc = 0;
-#endif
         const float rscale = e4m3fn_to_float_cuda(x[i].residual_scale_e4m3);
         dst_t * out = yy + i*QK_K;
         for (int k = 0; k < nc; k++) {
@@ -665,17 +651,17 @@ static void dequantize_row_q5_k_hifi_res8_cuda(const void * vx, dst_t * y,
 }
 
 // ------------------------------------------------------------------
-// Q6_K_HIFI_RES8 kernel (232 bytes, 64 threads)
+// Q6_K_HIFI_RES8: Q6_K bulk dequant + INT8 residuals
+// 232 bytes per block, 64 threads
 // ------------------------------------------------------------------
 template<typename dst_t>
 static __global__ void dequantize_block_q6_k_hifi_res8(const void * __restrict__ vx, dst_t * __restrict__ yy) {
     const block_q6_k_hifi_res8 * x = (const block_q6_k_hifi_res8 *) vx;
-    const int64_t i = blockIdx.x;
-
-    const int64_t tid  = threadIdx.x;
-    const int64_t ip   = tid/32;
-    const int64_t il   = tid - 32*ip;
-    const int64_t is   = 8*ip + il/16;
+    const int64_t i  = blockIdx.x;
+    const int64_t tid = threadIdx.x;
+    const int64_t ip  = tid/32;
+    const int64_t il  = tid - 32*ip;
+    const int64_t is  = 8*ip + il/16;
     dst_t * y = yy + i*QK_K + 128*ip + il;
     const float d = __half2float(x[i].d);
     const uint8_t * ql = x[i].ql + 64*ip + il;
@@ -691,9 +677,6 @@ static __global__ void dequantize_block_q6_k_hifi_res8(const void * __restrict__
     if (threadIdx.x == 0) {
         int nc = (int)x[i].outlier_count;
         if (nc > Q6_K_HIFI_RES8_MAX_OUTLIERS) nc = Q6_K_HIFI_RES8_MAX_OUTLIERS;
-#ifdef GGML_HIFI_NO_OUTLIERS
-        nc = 0;
-#endif
         const float rscale = x[i].residual_scale;
         dst_t * out = yy + i*QK_K;
         for (int k = 0; k < nc; k++) {
