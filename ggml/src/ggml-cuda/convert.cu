@@ -490,6 +490,9 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
 // HIFI quantization CUDA/HIP dequantization kernels
 // ============================================================
 
+// Debug-only: fires once to confirm kernel is reached and values are sane
+static __device__ int g_q3k_hifi_dbg_count = 0;
+
 // ------------------------------------------------------------------
 // Q3_K_HIFI: Q3_K bulk dequant + FP16 outlier replacements
 // 136 bytes per block, 64 threads
@@ -533,6 +536,11 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
             const int idx = (int)x[i].outlier_idx[k];
             yb[idx] = (dst_t)__half2float(x[i].outliers[k]);
         }
+        if (i == 0 && atomicAdd(&g_q3k_hifi_dbg_count, 1) < 2) {
+            printf("[Q3_K_HIFI GPU] d=%.6f nc=%d y[0]=%.4f y[1]=%.4f y[2]=%.4f y[3]=%.4f\n",
+                   __half2float(q3k->d), (int)x[0].outlier_count,
+                   (float)yb[0], (float)yb[1], (float)yb[2], (float)yb[3]);
+        }
     }
 }
 
@@ -540,6 +548,12 @@ template<typename dst_t>
 static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
                                            const int64_t k, cudaStream_t stream) {
     const int nb = k / QK_K;
+    static bool first = true;
+    if (first) {
+        first = false;
+        fprintf(stderr, "[Q3_K_HIFI HOST] k=%lld nb=%d blk_bytes=%zu\n",
+                (long long)k, nb, sizeof(block_q3_k_hifi));
+    }
     dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
 }
 
