@@ -71,6 +71,17 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "F32",      LLAMA_FTYPE_ALL_F32,         "26.00G              @ 7B",          },
     // Note: Ensure COPY comes after F32 to avoid ftype 0 from matching.
     { "COPY",     LLAMA_FTYPE_ALL_F32,         "only copy tensors, no quantizing",  },
+    // HIFI types
+    { "Q2_K_HIFI", LLAMA_FTYPE_MOSTLY_Q2_K_HIFI, "Q2_K with HIFI residual correction" },
+    { "Q3_K_HIFI", LLAMA_FTYPE_MOSTLY_Q3_K_HIFI, "Q3_K with HIFI outlier replacement" },
+    { "Q4_K_HIFI", LLAMA_FTYPE_MOSTLY_Q4_K_HIFI, "Q4_K with HIFI outlier replacement" },
+    { "Q5_K_HIFI", LLAMA_FTYPE_MOSTLY_Q5_K_HIFI, "Q5_K with HIFI residual correction" },
+    // LITE types
+    { "Q2_K_LITE", LLAMA_FTYPE_MOSTLY_Q2_K_LITE, "Q2_K LITE (Q1 base + residual)"     },
+    { "Q3_K_LITE", LLAMA_FTYPE_MOSTLY_Q3_K_LITE, "Q3_K LITE (Q2 base + residual)"     },
+    { "Q4_K_LITE", LLAMA_FTYPE_MOSTLY_Q4_K_LITE, "Q4_K LITE (Q3 base + residual)"     },
+    { "Q5_K_LITE", LLAMA_FTYPE_MOSTLY_Q5_K_LITE, "Q5_K LITE (Q4 base + residual)"     },
+    { "Q6_K_LITE", LLAMA_FTYPE_MOSTLY_Q6_K_LITE, "Q6_K LITE (Q5 base + residual)"     },
 };
 
 static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE       = "quantize.imatrix.file";

@@ -698,6 +698,203 @@ static void convert_unary_cont_cuda(const void * vx, dst_t * y, const int64_t k,
     convert_unary_cuda<src_t>(vx, y, k, 1, 1, 1, k, k, k, stream);
 }
 
+// =============================================================================
+// HIFI dequantization kernels
+// =============================================================================
+
+// Q3_K_HIFI (136 bytes per block, 64 threads)
+template<typename dst_t>
+static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i = blockIdx.x;
+    const block_q3_k_hifi * x = (const block_q3_k_hifi *) vx;
+    const block_q3_K * q3k = (const block_q3_K *)x[i].q3_k_data;
+
+    const int64_t r   = threadIdx.x/4;
+    const int64_t tid = r/2;
+    const int64_t is0 = r%2;
+    const int64_t l0  = 16*is0 + 4*(threadIdx.x%4);
+    const int64_t n   = tid / 4;
+    const int64_t j   = tid - 4*n;
+    uint8_t m  = 1 << (4*n + j);
+    int64_t is = 8*n + 2*j + is0;
+    int shift  = 2*j;
+
+    int8_t us = is <  4 ? (q3k->scales[is-0] & 0xF) | (((q3k->scales[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (q3k->scales[is-0] & 0xF) | (((q3k->scales[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (q3k->scales[is-8] >>  4) | (((q3k->scales[is+0] >> 4) & 3) << 4) :
+                          (q3k->scales[is-8] >>  4) | (((q3k->scales[is-4] >> 6) & 3) << 4);
+    const float d_all = __half2float(q3k->d);
+    const float dl    = d_all * (us - 32);
+
+    dst_t * y         = yy + i*QK_K + 128*n + 32*j;
+    const uint8_t * q = q3k->qs + 32*n;
+    const uint8_t * hm = q3k->hmask;
+    for (int l = l0; l < l0+4; ++l) {
+        y[l] = (dst_t)(dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4)));
+    }
+
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        dst_t * yb = yy + i*QK_K;
+        int nc = (int)x[i].outlier_count;
+        if (nc > Q3_K_HIFI_OUTLIERS) nc = Q3_K_HIFI_OUTLIERS;
+        for (int k = 0; k < nc; k++) {
+            const int idx = (int)x[i].outlier_idx[k];
+            yb[idx] = (dst_t)__half2float(x[i].outliers[k]);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
+                                           const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_K;
+    dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
+}
+
+// Q4_K_HIFI (168 bytes per block, 32 threads)
+template<typename dst_t>
+static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const block_q4_k_hifi * x = (const block_q4_k_hifi *) vx;
+    const int64_t i = blockIdx.x;
+    const block_q4_K * q4k = (const block_q4_K *)x[i].q4_k_data;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid/8;
+    const int64_t ir  = tid%8;
+    const int64_t is  = 2*il;
+    const int64_t n   = 4;
+    dst_t * y = yy + i*QK_K + 64*il + n*ir;
+    const float dall = __low2half(q4k->dm);
+    const float dmin = __high2half(q4k->dm);
+    const uint8_t * q = q4k->qs + 32*il + n*ir;
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, q4k->scales, sc, m);
+    const float d1 = dall * sc; const float m1 = dmin * m;
+    get_scale_min_k4(is + 1, q4k->scales, sc, m);
+    const float d2 = dall * sc; const float m2 = dmin * m;
+    for (int l = 0; l < n; ++l) {
+        y[l +  0] = (dst_t)(d1 * (q[l] & 0xF) - m1);
+        y[l + 32] = (dst_t)(d2 * (q[l] >>  4) - m2);
+    }
+
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        dst_t * yb = yy + i*QK_K;
+        for (int k = 0; k < Q4_K_HIFI_OUTLIERS; k++) {
+            const float v = __half2float(x[i].outliers[k]);
+            if (v == 0.0f) break;  // FP16-zero sentinel
+            const int idx = (int)x[i].outlier_idx[k];
+            yb[idx] = (dst_t)v;
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q4_k_hifi_cuda(const void * vx, dst_t * y,
+                                           const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_K;
+    dequantize_block_q4_k_hifi<<<nb, 32, 0, stream>>>(vx, y);
+}
+
+// Q5_K_HIFI_RES8 (196 bytes per block, 64 threads)
+__device__ static float e4m3fn_to_float_cuda(uint8_t b) {
+    if ((b & 0x7F) == 0x7F) return 0.0f;
+    const int s = (b >> 7) & 1;
+    const int e = (b >> 3) & 0xF;
+    const int m = b & 0x7;
+    float v = (e == 0) ? ldexpf((float)m, -9) : ldexpf((float)(8 + m), e - 10);
+    return s ? -v : v;
+}
+
+template<typename dst_t>
+static __global__ void dequantize_block_q5_k_hifi_res8(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const block_q5_k_hifi_res8 * x = (const block_q5_k_hifi_res8 *) vx;
+    const int64_t i = blockIdx.x;
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid/16;
+    const int64_t ir  = tid%16;
+    const int64_t is  = 2*il;
+    dst_t * y = yy + i*QK_K + 64*il + 2*ir;
+    const float dall = __low2half(x[i].dm);
+    const float dmin = __high2half(x[i].dm);
+    const uint8_t * ql = x[i].qs + 32*il + 2*ir;
+    const uint8_t * qh = x[i].qh + 2*ir;
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, x[i].scales, sc, m);
+    const float d1 = dall * sc; const float m1 = dmin * m;
+    get_scale_min_k4(is + 1, x[i].scales, sc, m);
+    const float d2 = dall * sc; const float m2 = dmin * m;
+    uint8_t hm = 1 << (2*il);
+    y[ 0] = (dst_t)(d1 * ((ql[ 0] & 0xF) + (qh[ 0] & hm ? 16 : 0)) - m1);
+    y[ 1] = (dst_t)(d1 * ((ql[ 1] & 0xF) + (qh[ 1] & hm ? 16 : 0)) - m1);
+    hm <<= 1;
+    y[32] = (dst_t)(d2 * ((ql[ 0] >>  4) + (qh[ 0] & hm ? 16 : 0)) - m2);
+    y[33] = (dst_t)(d2 * ((ql[ 1] >>  4) + (qh[ 1] & hm ? 16 : 0)) - m2);
+
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)x[i].outlier_count;
+        if (nc > Q5_K_HIFI_RES8_MAX_OUTLIERS) nc = Q5_K_HIFI_RES8_MAX_OUTLIERS;
+        const float rscale = e4m3fn_to_float_cuda(x[i].residual_scale_e4m3);
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            const int pos = (int)x[i].outlier_idx[k];
+            out[pos] = (dst_t)((float)out[pos] + (float)x[i].residual_vals[k] * rscale);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q5_k_hifi_res8_cuda(const void * vx, dst_t * y,
+                                                const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_K;
+    dequantize_block_q5_k_hifi_res8<<<nb, 64, 0, stream>>>(vx, y);
+}
+
+// Q6_K_HIFI_RES8 (232 bytes per block, 64 threads)
+template<typename dst_t>
+static __global__ void dequantize_block_q6_k_hifi_res8(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const block_q6_k_hifi_res8 * x = (const block_q6_k_hifi_res8 *) vx;
+    const int64_t i = blockIdx.x;
+    const int64_t tid  = threadIdx.x;
+    const int64_t ip   = tid/32;
+    const int64_t il   = tid - 32*ip;
+    const int64_t is   = 8*ip + il/16;
+    dst_t * y = yy + i*QK_K + 128*ip + il;
+    const float d = __half2float(x[i].d);
+    const uint8_t * ql = x[i].ql + 64*ip + il;
+    const uint8_t   qh = x[i].qh[32*ip + il];
+    const int8_t  * sc = x[i].scales + is;
+    y[ 0] = (dst_t)(d * sc[0] * ((int8_t)((ql[ 0] & 0xF) | (((qh >> 0) & 3) << 4)) - 32));
+    y[32] = (dst_t)(d * sc[2] * ((int8_t)((ql[32] & 0xF) | (((qh >> 2) & 3) << 4)) - 32));
+    y[64] = (dst_t)(d * sc[4] * ((int8_t)((ql[ 0]  >> 4) | (((qh >> 4) & 3) << 4)) - 32));
+    y[96] = (dst_t)(d * sc[6] * ((int8_t)((ql[32]  >> 4) | (((qh >> 6) & 3) << 4)) - 32));
+
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        int nc = (int)x[i].outlier_count;
+        if (nc > Q6_K_HIFI_RES8_MAX_OUTLIERS) nc = Q6_K_HIFI_RES8_MAX_OUTLIERS;
+        const float rscale = x[i].residual_scale;
+        dst_t * out = yy + i*QK_K;
+        for (int k = 0; k < nc; k++) {
+            const int pos = (int)x[i].outlier_idx[k];
+            out[pos] = (dst_t)((float)out[pos] + rscale * ((float)x[i].residual_vals[k] / 127.0f));
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q6_k_hifi_res8_cuda(const void * vx, dst_t * y,
+                                                const int64_t k, cudaStream_t stream) {
+    const int nb = k / QK_K;
+    dequantize_block_q6_k_hifi_res8<<<nb, 64, 0, stream>>>(vx, y);
+}
+
+// =============================================================================
+// End of HIFI dequantization kernels
+// =============================================================================
+
 to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
     switch (type) {
         case GGML_TYPE_F32:
@@ -758,6 +955,14 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_mxfp4_cuda;
         case GGML_TYPE_NVFP4:
             return dequantize_row_nvfp4_cuda;
+        case GGML_TYPE_Q3_K_HIFI:
+            return dequantize_row_q3_k_hifi_cuda;
+        case GGML_TYPE_Q4_K_HIFI:
+            return dequantize_row_q4_k_hifi_cuda;
+        case GGML_TYPE_Q5_K_HIFI_RES8:
+            return dequantize_row_q5_k_hifi_res8_cuda;
+        case GGML_TYPE_Q6_K_HIFI_RES8:
+            return dequantize_row_q6_k_hifi_res8_cuda;
         case GGML_TYPE_F32:
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_BF16:
@@ -813,6 +1018,14 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_mxfp4_cuda;
         case GGML_TYPE_NVFP4:
             return dequantize_row_nvfp4_cuda;
+        case GGML_TYPE_Q3_K_HIFI:
+            return dequantize_row_q3_k_hifi_cuda;
+        case GGML_TYPE_Q4_K_HIFI:
+            return dequantize_row_q4_k_hifi_cuda;
+        case GGML_TYPE_Q5_K_HIFI_RES8:
+            return dequantize_row_q5_k_hifi_res8_cuda;
+        case GGML_TYPE_Q6_K_HIFI_RES8:
+            return dequantize_row_q6_k_hifi_res8_cuda;
         case GGML_TYPE_F16:
             return convert_unary_cont_cuda<half>;
         case GGML_TYPE_BF16:

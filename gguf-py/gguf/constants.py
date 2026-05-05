@@ -4025,6 +4025,20 @@ class GGMLQuantizationType(IntEnum):
     MXFP4   = 39
     NVFP4   = 40
     Q1_0    = 41
+    # HIFI / LITE quantization families
+    Q3_K_HIFI         = 42
+    Q6_K_HIFI         = 43
+    Q6_K_HIFI_DYNAMIC = 44
+    Q6_K_HIFI_RES8    = 45
+    Q5_K_HIFI_RES8    = 46
+    Q3_K_HIFI_RES8    = 47
+    Q4_K_HIFI         = 48
+    Q2_K_HIFI         = 49
+    Q2_K_LITE         = 50
+    Q3_K_LITE         = 51
+    Q4_K_LITE         = 52
+    Q5_K_LITE         = 53
+    Q6_K_LITE         = 54
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -4079,6 +4093,16 @@ class LlamaFileType(IntEnum):
     MOSTLY_MXFP4_MOE     = 38  # except 1d tensors
     MOSTLY_NVFP4         = 39  # except 1d tensors
     MOSTLY_Q1_0          = 40  # except 1d tensors
+    # 41–43 reserved (legacy HIFI ids removed)
+    MOSTLY_Q4_K_HIFI  = 44
+    MOSTLY_Q3_K_HIFI  = 45
+    MOSTLY_Q5_K_HIFI  = 46
+    MOSTLY_Q2_K_HIFI  = 47
+    MOSTLY_Q2_K_LITE  = 48
+    MOSTLY_Q3_K_LITE  = 49
+    MOSTLY_Q4_K_LITE  = 50
+    MOSTLY_Q5_K_LITE  = 51
+    MOSTLY_Q6_K_LITE  = 52
 
     GUESSED              = 1024  # not specified in the model file
 
@@ -4197,6 +4221,20 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.MXFP4:   (32, 1 + 16),
     GGMLQuantizationType.NVFP4:   (64, 4 + 32),
     GGMLQuantizationType.Q1_0:    (128, 2 + 16),
+    # HIFI / LITE quantization families
+    GGMLQuantizationType.Q3_K_HIFI:         (256, 136),
+    GGMLQuantizationType.Q6_K_HIFI:         (256, 222),
+    GGMLQuantizationType.Q6_K_HIFI_DYNAMIC: (256, 236),
+    GGMLQuantizationType.Q6_K_HIFI_RES8:    (256, 232),
+    GGMLQuantizationType.Q5_K_HIFI_RES8:    (256, 196),
+    GGMLQuantizationType.Q3_K_HIFI_RES8:    (256, 132),
+    GGMLQuantizationType.Q4_K_HIFI:         (256, 168),
+    GGMLQuantizationType.Q2_K_HIFI:         (256, 96),
+    GGMLQuantizationType.Q2_K_LITE:         (256, 96),
+    GGMLQuantizationType.Q3_K_LITE:         (256, 104),
+    GGMLQuantizationType.Q4_K_LITE:         (256, 128),
+    GGMLQuantizationType.Q5_K_LITE:         (256, 164),
+    GGMLQuantizationType.Q6_K_LITE:         (256, 196),
 }
 
 
