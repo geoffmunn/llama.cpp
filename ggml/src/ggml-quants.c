@@ -5618,16 +5618,6 @@ void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * G
             row[x[i].outlier_idx[k2]] = GGML_FP16_TO_FP32(x[i].outliers[k2]);
         }
 
-        if (i == 0) {
-            static bool cpu_printed = false;
-            if (!cpu_printed) {
-                cpu_printed = true;
-                fprintf(stderr, "[CPU Q3K_HIFI BLK0] sizeof=%d d=%f nc=%d y[0]=%f y[1]=%f y[4]=%f y[5]=%f\n",
-                        (int)sizeof(block_q3_k_hifi),
-                        GGML_FP16_TO_FP32(base->d), (int)x[0].outlier_count,
-                        row[0], row[1], row[4], row[5]);
-            }
-        }
     }
 }
 

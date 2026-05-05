@@ -490,19 +490,50 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
 // HIFI quantization CUDA/HIP dequantization kernels
 // ============================================================
 
-// Debug-only: fires once per block index to check inter-block stride
-static __device__ int g_q3k_dbg_blk0 = 0;
-static __device__ int g_q3k_dbg_blk1 = 0;
-
 // ------------------------------------------------------------------
 // Q3_K_HIFI: Q3_K bulk dequant + FP16 outlier replacements
 // 136 bytes per block, 64 threads
+//
+// Byte layout of block_q3_k_hifi (136 bytes):
+//   [0..109]  = q3_k_data (block_q3_K: hmask[32] qs[64] scales[12] d[2])
+//   [110..117]= outlier_idx[8]
+//   [118..133]= outliers[8 × half]
+//   [134]     = outlier_count
+//   [135]     = _pad
+//
+// Uses shared-memory staging to avoid global-memory type-punning,
+// which some ROCm compiler versions mishandle for non-power-of-2 strides.
 // ------------------------------------------------------------------
+static constexpr int Q3_K_HIFI_GPU_STRIDE    = 136;
+static constexpr int Q3_K_HIFI_GPU_IDX_OFF   = 110;
+static constexpr int Q3_K_HIFI_GPU_VALS_OFF  = 118;
+static constexpr int Q3_K_HIFI_GPU_COUNT_OFF = 134;
+static constexpr int Q3_K_HIFI_GPU_MAX_OUT   =   8;
+// block_q3_K field offsets within q3_k_data[110]:
+static constexpr int Q3_K_OFF_HMASK  =   0;  // hmask[32]
+static constexpr int Q3_K_OFF_QS     =  32;  // qs[64]
+static constexpr int Q3_K_OFF_SCALES =  96;  // scales[12]
+static constexpr int Q3_K_OFF_D      = 108;  // d (fp16)
+
 template<typename dst_t>
 static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, dst_t * __restrict__ yy) {
     const int64_t i = blockIdx.x;
-    const block_q3_k_hifi * x = (const block_q3_k_hifi *) vx;
-    const block_q3_K * q3k = (const block_q3_K *)x[i].q3_k_data;
+
+    // Cooperatively copy the entire 136-byte block to shared memory.
+    // Avoids type-punning through global-memory struct casts (ROCm compiler bug on gfx1151).
+    __shared__ uint8_t smem[Q3_K_HIFI_GPU_STRIDE];
+    const uint8_t * gblk = (const uint8_t *)vx + i * Q3_K_HIFI_GPU_STRIDE;
+    for (int t = threadIdx.x; t < Q3_K_HIFI_GPU_STRIDE; t += blockDim.x) {
+        smem[t] = gblk[t];
+    }
+    __syncthreads();
+
+    // All Q3_K field reads come from shared memory:
+    const uint8_t * hmask = smem + Q3_K_OFF_HMASK;
+    const uint8_t * qs    = smem + Q3_K_OFF_QS;
+    const uint8_t * sc    = smem + Q3_K_OFF_SCALES;
+    const uint16_t d_bits = (uint16_t)smem[Q3_K_OFF_D] | ((uint16_t)smem[Q3_K_OFF_D+1] << 8);
+    const float d_all     = __half2float(__ushort_as_half(d_bits));
 
     const int64_t r   = threadIdx.x/4;
     const int64_t tid = r/2;
@@ -512,42 +543,29 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
     const int64_t j   = tid - 4*n;
     uint8_t m  = 1 << (4*n + j);
     int64_t is = 8*n + 2*j + is0;
-    int shift  = 2*j;
+    int     shift = 2*j;
 
-    int8_t us = is <  4 ? (q3k->scales[is-0] & 0xF) | (((q3k->scales[is+8] >> 0) & 3) << 4) :
-                is <  8 ? (q3k->scales[is-0] & 0xF) | (((q3k->scales[is+4] >> 2) & 3) << 4) :
-                is < 12 ? (q3k->scales[is-8] >>  4) | (((q3k->scales[is+0] >> 4) & 3) << 4) :
-                          (q3k->scales[is-8] >>  4) | (((q3k->scales[is-4] >> 6) & 3) << 4);
-    const float d_all = __half2float(q3k->d);
-    const float dl    = d_all * (us - 32);
+    int8_t us = is <  4 ? (sc[is-0] & 0xF) | (((sc[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (sc[is-0] & 0xF) | (((sc[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (sc[is-8] >>  4) | (((sc[is+0] >> 4) & 3) << 4) :
+                          (sc[is-8] >>  4) | (((sc[is-4] >> 6) & 3) << 4);
+    const float dl = d_all * (us - 32);
 
-    dst_t * y         = yy + i*QK_K + 128*n + 32*j;
-    const uint8_t * q = q3k->qs + 32*n;
-    const uint8_t * hm = q3k->hmask;
+    dst_t * y = yy + i*QK_K + 128*n + 32*j;
     for (int l = l0; l < l0+4; ++l) {
-        y[l] = (dst_t)(dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4)));
+        y[l] = (dst_t)(dl * ((int8_t)((qs[l + 32*n] >> shift) & 3) - ((hmask[l] & m) ? 0 : 4)));
     }
 
     __syncthreads();
     if (threadIdx.x == 0) {
-        dst_t * yb = yy + i*QK_K;
-        int nc = (int)x[i].outlier_count;
-        if (nc > Q3_K_HIFI_OUTLIERS) nc = Q3_K_HIFI_OUTLIERS;
+        const uint8_t * idx_ptr = smem + Q3_K_HIFI_GPU_IDX_OFF;
+        const uint8_t * val_raw = smem + Q3_K_HIFI_GPU_VALS_OFF;
+        int nc = (int)smem[Q3_K_HIFI_GPU_COUNT_OFF];
+        if (nc > Q3_K_HIFI_GPU_MAX_OUT) nc = Q3_K_HIFI_GPU_MAX_OUT;
+        dst_t * out = yy + i*QK_K;
         for (int k = 0; k < nc; k++) {
-            const int idx = (int)x[i].outlier_idx[k];
-            yb[idx] = (dst_t)__half2float(x[i].outliers[k]);
-        }
-        if (i == 0 && atomicAdd(&g_q3k_dbg_blk0, 1) < 2) {
-            printf("[Q3_K_HIFI BLK0] sizeof=%d d=%.6f nc=%d y[0]=%.4f y[1]=%.4f y[4]=%.4f y[5]=%.4f\n",
-                   (int)sizeof(block_q3_k_hifi),
-                   __half2float(q3k->d), (int)x[0].outlier_count,
-                   (float)yb[0], (float)yb[1], (float)yb[4], (float)yb[5]);
-        }
-        if (i == 1 && atomicAdd(&g_q3k_dbg_blk1, 1) < 1) {
-            printf("[Q3_K_HIFI BLK1] sizeof=%d d=%.6f nc=%d y[256]=%.4f y[257]=%.4f y[260]=%.4f y[261]=%.4f\n",
-                   (int)sizeof(block_q3_k_hifi),
-                   __half2float(q3k->d), (int)x[1].outlier_count,
-                   (float)yb[0], (float)yb[1], (float)yb[4], (float)yb[5]);
+            const uint16_t bits = (uint16_t)val_raw[2*k] | ((uint16_t)val_raw[2*k+1] << 8);
+            out[(int)idx_ptr[k]] = (dst_t)__half2float(__ushort_as_half(bits));
         }
     }
 }
@@ -556,10 +574,6 @@ template<typename dst_t>
 static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
                                            const int64_t k, cudaStream_t stream) {
     const int nb = k / QK_K;
-    static int call_count = 0;
-    if (call_count++ < 10) {
-        fprintf(stderr, "[Q3_K_HIFI HOST call %d] k=%lld nb=%d\n", call_count, (long long)k, nb);
-    }
     dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
 }
 
