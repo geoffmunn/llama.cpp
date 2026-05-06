@@ -1497,7 +1497,13 @@ static void ggml_cuda_op_mul_mat_cublas(
     const bool supports_bf16 = GGML_CUDA_CC_IS_NVIDIA(cc) || GGML_CUDA_CC_IS_AMD(cc) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
 
+    // HIFI types: force FP32 SGEMM — the FP16 hipBLAS path produces incorrect
+    // results on RDNA4 for these types (standard types use MMQ instead and never hit this).
+    const bool is_hifi_type = src0->type == GGML_TYPE_Q3_K_HIFI ||
+                              src0->type == GGML_TYPE_Q4_K_HIFI;
+
     const bool use_fp16 =
+        !is_hifi_type &&
         src0->type != GGML_TYPE_NVFP4 &&
         (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) &&
         ggml_is_contiguous(src0) &&
