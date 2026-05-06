@@ -733,6 +733,10 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
         y[l] = (dst_t)(dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4)));
     }
 
+    // On AMD RDNA, __syncthreads() (s_barrier) does not include a global memory
+    // fence (s_waitcnt vmcnt=0). Without it, thread 0's outlier writes can be
+    // overwritten by other threads' pending global writes that commit after the barrier.
+    __threadfence_block();
     __syncthreads();
     if (threadIdx.x == 0) {
         dst_t * yb = yy + i*QK_K;
@@ -778,14 +782,17 @@ static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, 
         y[l + 32] = (dst_t)(d2 * (q[l] >>  4) - m2);
     }
 
+    // On AMD RDNA, __syncthreads() (s_barrier) does not include a global memory
+    // fence (s_waitcnt vmcnt=0). Without it, thread 0's outlier writes can be
+    // overwritten by other threads' pending global writes that commit after the barrier.
+    __threadfence_block();
     __syncthreads();
     if (threadIdx.x == 0) {
         dst_t * yb = yy + i*QK_K;
+        // All Q4_K_HIFI blocks always have exactly 8 valid outliers (quantizer always selects top-8).
         for (int k = 0; k < Q4_K_HIFI_OUTLIERS; k++) {
-            const float v = __half2float(x[i].outliers[k]);
-            if (v == 0.0f) break;  // FP16-zero sentinel
             const int idx = (int)x[i].outlier_idx[k];
-            yb[idx] = (dst_t)v;
+            yb[idx] = (dst_t)__half2float(x[i].outliers[k]);
         }
     }
 }
@@ -832,6 +839,7 @@ static __global__ void dequantize_block_q5_k_hifi_res8(const void * __restrict__
     y[32] = (dst_t)(d2 * ((ql[ 0] >>  4) + (qh[ 0] & hm ? 16 : 0)) - m2);
     y[33] = (dst_t)(d2 * ((ql[ 1] >>  4) + (qh[ 1] & hm ? 16 : 0)) - m2);
 
+    __threadfence_block();
     __syncthreads();
     if (threadIdx.x == 0) {
         int nc = (int)x[i].outlier_count;
@@ -871,6 +879,7 @@ static __global__ void dequantize_block_q6_k_hifi_res8(const void * __restrict__
     y[64] = (dst_t)(d * sc[4] * ((int8_t)((ql[ 0]  >> 4) | (((qh >> 4) & 3) << 4)) - 32));
     y[96] = (dst_t)(d * sc[6] * ((int8_t)((ql[32]  >> 4) | (((qh >> 6) & 3) << 4)) - 32));
 
+    __threadfence_block();
     __syncthreads();
     if (threadIdx.x == 0) {
         int nc = (int)x[i].outlier_count;
