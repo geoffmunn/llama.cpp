@@ -14264,7 +14264,141 @@ names before the SPIR-V data is generated.
 
 ---
 
-## 12. File Reference
+## 12. Post-Implementation Build Fixes
+
+The following corrections were discovered during the first successful build on upstream llama.cpp
+(tested on CUDA, Metal, and ROCm). Apply them after following the diffs in sections 2–8.
+
+---
+
+### 12.1 `ggml/src/ggml-quants.c` — Missing closing braces in LITE quantize functions
+
+The diffs for the Q6_K_LITE, Q3_K_LITE, and Q2_K_LITE sections were generated with some closing
+braces dropped. The affected functions are:
+
+**Q6_K_LITE block** (`dequantize_row_q6_k_lite` and `quantize_q6_k_lite`):
+- `if (rc > 0)` block was missing its closing `}`
+- `for (int64_t ib ...)` loop was missing its closing `}`
+- `if (hifi_ctx && hifi_ctx->is_active)` was missing its closing `}`
+- `if (quant_weights)` was missing its closing `}`
+- `for (int64_t row ...)` loop was missing its closing `}`
+- `return nrow * row_size;` and function closing `}` were missing
+
+**Q3_K_LITE block** (`quantize_row_q3_k_lite_inner`, `dequantize_row_q3_k_lite`):
+- `assert(k % QK_K == 0)` and `const int64_t nb = k / QK_K;` were missing from `quantize_row_q3_k_lite_inner`
+- `if (residual_budget == 0)` was missing its closing `}` and `continue;` statement
+- `for (int i = 0; i < QK_K; ++i)` was missing its closing `}`
+- `for (int k_idx ...)` was missing its closing `}`
+- `assert(k % QK_K == 0)` and `const int64_t nb = k / QK_K;` were missing from `dequantize_row_q3_k_lite`
+- `if (rc > 0)`, `for (int64_t ib ...)`, and function `}` were all missing
+
+**Q2_K_LITE block** (`quantize_row_q2_k_lite_inner`, `dequantize_row_q2_k_lite`, `quantize_q2_k_lite`):
+- Same pattern as Q3_K_LITE: missing `continue;`, missing closing `}` for `if`, `for`, and function bodies
+- `if (hifi_ctx && hifi_ctx->is_active)` missing closing `}`
+- `if (quant_weights)` missing closing `}`
+- `for (int64_t row ...)` loop missing closing `}` and `return nrow * row_size;`
+
+**Verify** the correct versions by reading the canonical implementations in the file after applying —
+each `quantize_row_*_lite_inner` must have `assert(k % QK_K == 0)`, a `continue;` inside the
+`if (residual_budget == 0)` block, and properly nested closing braces for all `if`/`for`/function
+scopes. Each `quantize_q*_lite` must close the `if (hifi_ctx ...)` and `if (quant_weights)` blocks
+before declaring `char * qrow` and must end with `return nrow * row_size;`.
+
+---
+
+### 12.2 `ggml/src/ggml-cpu/arch/arm/quants.c` — Wrong include path and duplicate forwarding stubs
+
+**Include path:** The agent will add `#include "../../ggml-quants-hifi.h"` at line 4, but the file
+is two directory levels deeper than expected. The correct path is:
+
+```c
+#include "../../../ggml-quants-hifi.h"
+```
+
+**Duplicate forwarding stubs:** The agent incorrectly adds forwarding stubs for functions that are
+already fully defined in `ggml/src/ggml-cpu/quants.c` and have no `_generic` variant. Remove these
+stubs entirely from `arch/arm/quants.c`:
+
+```c
+// REMOVE these — they call non-existent _generic / _ex variants and duplicate quants.c:
+void ggml_vec_dot_q6_k_hifi_dynamic_q8_K(...) { ggml_vec_dot_q6_k_hifi_dynamic_q8_K_generic(...); }
+void ggml_vec_dot_q6_k_hifi_res8_q8_K(...)    { ggml_vec_dot_q6_k_hifi_res8_q8_K_generic(...); }
+void ggml_vec_dot_q5_k_hifi_res8_q8_K(...)    { ggml_vec_dot_q5_k_hifi_res8_q8_K_generic(...); }
+void quantize_row_q5_k_hifi_res8(...)          { quantize_row_q5_k_hifi_res8_ref(...); }
+size_t quantize_q5_k_hifi_res8(...)            { return quantize_q5_k_hifi_res8_ex(...); }
+```
+
+The `_generic` suffix functions (`ggml_vec_dot_q6_k_hifi_dynamic_q8_K_generic` etc.) and
+`quantize_q5_k_hifi_res8_ex` do not exist. Only `q2_k_hifi`, `q3_k_hifi`, `q4_k_hifi`, and all
+K_LITE types have `_generic` variants — the RES8 and DYNAMIC types do not.
+
+**Missing prototype warning:** The agent will also add `dequantize_row_q3_k_hifi_neon` without a
+forward declaration. Since it is only used within `arm/quants.c` (not referenced from any other
+translation unit), declare it `static`:
+
+```c
+static void dequantize_row_q3_k_hifi_neon(const block_q3_k_hifi * GGML_RESTRICT x,
+                                           float * GGML_RESTRICT y, int64_t k) {
+```
+
+---
+
+### 12.3 `ggml/src/ggml-cpu/arch/x86/quants.c` — Same fixes as ARM
+
+Apply exactly the same two fixes:
+- Change `#include "../../ggml-quants-hifi.h"` → `#include "../../../ggml-quants-hifi.h"`
+- Remove the same five duplicate/broken forwarding stubs listed in 12.2
+
+---
+
+### 12.4 `ggml/src/ggml-cpu/quants.c` — Stray diff header
+
+The agent may insert a literal diff header line into the source file after `quantize_row_q2_k_lite`:
+
+```
+++ b/ggml/src/ggml-cpu/repack.cpp
+```
+
+Delete that line. The two blank lines around it can also be collapsed to one.
+
+---
+
+### 12.5 `ggml/src/ggml-cpu/quants.c` and `quants.h` — Missing `quantize_row_q3_k_hifi_res8` wrapper
+
+The guide's section 3.11 (`ggml-cpu.c` type trait registration) uses `quantize_row_q3_k_hifi_res8`
+as the `from_float` function for `GGML_TYPE_Q3_K_HIFI_RES8`, but only the `_ref` variant is
+declared in `ggml-quants.h` (which `ggml-cpu.c` does not include). The plain wrapper is never
+created by the guide diffs.
+
+Add the following wrapper to `ggml/src/ggml-cpu/quants.c` (alongside the existing
+`quantize_row_q5_k_hifi_res8` wrapper):
+
+```c
+void quantize_row_q3_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q3_k_hifi_res8_ref(x, (block_q3_k_hifi_res8 *)y, k);
+}
+```
+
+And add the declaration to `ggml/src/ggml-cpu/quants.h` (alongside `quantize_row_q5_k_hifi_res8`):
+
+```c
+void quantize_row_q3_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+```
+
+The `ggml-cpu.c` type trait entry should use the plain wrapper (not `_ref`):
+
+```c
+[GGML_TYPE_Q3_K_HIFI_RES8] = {
+    .from_float   = quantize_row_q3_k_hifi_res8,
+    .vec_dot      = ggml_vec_dot_q3_K_q8_K,  // fallback to q3_K kernel
+    .vec_dot_type = GGML_TYPE_Q8_K,
+    .nrows        = 1,
+},
+```
+
+---
+
+## 13. File Reference
 
 This guide is self-contained. All diffs and new file contents are embedded above.
 The baseline upstream commit is `a29e4c0b7`. Every diff in this guide was generated with:
