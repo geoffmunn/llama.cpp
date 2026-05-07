@@ -35,6 +35,8 @@ GGML_API void quantize_row_q8_K_ref(const float * GGML_RESTRICT x, block_q8_K * 
 GGML_API void quantize_row_tq1_0_ref(const float * GGML_RESTRICT x, block_tq1_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_tq2_0_ref(const float * GGML_RESTRICT x, block_tq2_0 * GGML_RESTRICT y, int64_t k);
 
+GGML_API void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi * GGML_RESTRICT y, int64_t k);
+
 GGML_API void quantize_row_iq3_xxs_ref(const float * GGML_RESTRICT x, block_iq3_xxs * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_iq4_nl_ref (const float * GGML_RESTRICT x, block_iq4_nl  * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_iq4_xs_ref (const float * GGML_RESTRICT x, block_iq4_xs  * GGML_RESTRICT y, int64_t k);
@@ -106,6 +108,62 @@ GGML_API void iq2xs_init_impl(enum ggml_type type);
 GGML_API void iq2xs_free_impl(enum ggml_type type);
 GGML_API void iq3xs_init_impl(int grid_size);
 GGML_API void iq3xs_free_impl(int grid_size);
+
+// HIFI quantization functions
+GGML_API void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q4_k_hifi_ref(const float * GGML_RESTRICT x, block_q4_k_hifi * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q4_k_hifi(const block_q4_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q4_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q3_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q3_k_hifi_res8 * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q3_k_hifi_res8(const block_q3_k_hifi_res8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q3_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q2_k_hifi_ref(const float * GGML_RESTRICT x, block_q2_k_hifi * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q2_k_hifi(const block_q2_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q2_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q6_k_hifi_ref(const float * GGML_RESTRICT x, block_q6_k_hifi * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q6_k_hifi(const block_q6_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q6_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q6_k_hifi_dynamic_ref(const float * GGML_RESTRICT x, block_q6_k_hifi_dynamic * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_q6_k_hifi_dynamic_ref_ex(const float * GGML_RESTRICT x, block_q6_k_hifi_dynamic * GGML_RESTRICT y, int64_t k, int outlier_count);
+GGML_API void dequantize_row_q6_k_hifi_dynamic(const block_q6_k_hifi_dynamic * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q6_k_hifi_dynamic(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q6_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q6_k_hifi_res8 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_q6_k_hifi_res8_ref_ex(const float * GGML_RESTRICT x, block_q6_k_hifi_res8 * GGML_RESTRICT y, int64_t k, int outlier_count);
+GGML_API void dequantize_row_q6_k_hifi_res8(const block_q6_k_hifi_res8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q6_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q5_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q5_k_hifi_res8 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_q5_k_hifi_res8_ref_ex(const float * GGML_RESTRICT x, block_q5_k_hifi_res8 * GGML_RESTRICT y, int64_t k, int outlier_count);
+GGML_API void dequantize_row_q5_k_hifi_res8(const block_q5_k_hifi_res8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q5_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+// K_LITE family
+GGML_API void quantize_row_q2_k_lite_ref(const float * GGML_RESTRICT x, block_q2_k_lite * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q2_k_lite(const block_q2_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q2_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q3_k_lite_ref(const float * GGML_RESTRICT x, block_q3_k_lite * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q3_k_lite(const block_q3_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q3_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q4_k_lite_ref(const float * GGML_RESTRICT x, block_q4_k_lite * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q4_k_lite(const block_q4_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q4_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q5_k_lite_ref(const float * GGML_RESTRICT x, block_q5_k_lite * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q5_k_lite(const block_q5_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q5_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
+GGML_API void quantize_row_q6_k_lite_ref(const float * GGML_RESTRICT x, block_q6_k_lite * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q6_k_lite(const block_q6_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q6_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 #ifdef __cplusplus
 }

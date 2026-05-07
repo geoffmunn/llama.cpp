@@ -1,6 +1,7 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 #include "ggml-quants.h"
+#include "../../ggml-quants-hifi.h"
 #include "ggml-impl.h"
 #include "ggml-cpu.h"
 #include "simd-mappings.h"
@@ -2480,6 +2481,72 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     UNUSED(nb);
     ggml_vec_dot_q6_K_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
+}
+
+// Q3_K_HIFI vec_dot - AVX2 optimized implementation
+// Copied from Q3_K AVX2 kernel and adapted for block_q3_k_hifi + outlier correction
+void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    // TODO: Optimize AVX2 implementation for sparse layout
+    // For now, fall back to generic implementation which handles sparse layout correctly
+    ggml_vec_dot_q3_k_hifi_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+// Q4_K_HIFI vec_dot - delegates to generic implementation
+void ggml_vec_dot_q4_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_q4_k_hifi_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+// Q2_K_HIFI vec_dot - delegates to generic implementation
+void ggml_vec_dot_q2_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_q2_k_hifi_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+// ---------------------------------------------------------------------------
+// K_LITE vec_dot - x86 forwarding stubs (delegate to generic; TODO: AVX2)
+// ---------------------------------------------------------------------------
+void ggml_vec_dot_q2_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    // TODO: AVX2 optimization
+    ggml_vec_dot_q2_k_lite_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void ggml_vec_dot_q3_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    // TODO: AVX2 optimization
+    ggml_vec_dot_q3_k_lite_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void ggml_vec_dot_q4_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    // TODO: AVX2 optimization
+    ggml_vec_dot_q4_k_lite_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void ggml_vec_dot_q5_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    // TODO: AVX2 optimization
+    ggml_vec_dot_q5_k_lite_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void ggml_vec_dot_q6_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    // TODO: AVX2 optimization
+    ggml_vec_dot_q6_k_lite_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void ggml_vec_dot_q6_k_hifi_dynamic_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_q6_k_hifi_dynamic_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void ggml_vec_dot_q6_k_hifi_res8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_q6_k_hifi_res8_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void ggml_vec_dot_q5_k_hifi_res8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_q5_k_hifi_res8_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void quantize_row_q5_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q5_k_hifi_res8_ref(x, (block_q5_k_hifi_res8 *)y, k);
+}
+
+size_t quantize_q5_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    return quantize_q5_k_hifi_res8_ex(src, dst, nrows, n_per_row, imatrix, Q5_K_HIFI_RES8_MAX_OUTLIERS);
 }
 
 #if defined (__AVX__) || defined (__AVX2__)

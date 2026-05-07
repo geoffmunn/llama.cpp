@@ -3,15 +3,39 @@
 #include "llama-model-loader.h"
 #include "llama-ext.h"
 
+// HIFI layer-adaptive quantization context
+extern "C" {
+#include "../ggml/src/ggml-quants-hifi.h"
+}
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cinttypes>
+#include <cstdlib>  // for getenv
 #include <fstream>
 #include <mutex>
+#include <numeric>
 #include <regex>
 #include <thread>
 #include <unordered_map>
+#include <vector>
+#include <map>
+
+// ===========================================================================
+// IMATRIX-GUIDED TENSOR SELECTION FOR Q3_K_HIFI
+// Store tensor importance scores for global ranking and threshold computation
+// ===========================================================================
+struct tensor_importance_entry {
+    std::string name;
+    float importance;
+    bool is_candidate;  // true if tensor is a Q3_K_HIFI candidate (input projection)
+};
+
+// Global storage for tensor importance data (populated during pre-pass)
+static std::map<std::string, float> g_tensor_importance_map;
+static float g_importance_threshold = 0.0f;
+static bool g_imatrix_guided_enabled = false;
 
 // result of parsing --tensor-type option
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
@@ -42,6 +66,272 @@ static void zeros(std::ofstream & file, size_t n) {
     for (size_t i = 0; i < n; ++i) {
         file.write(&zero, 1);
     }
+}
+
+// Compute model size in billions from hyperparameters
+static float compute_model_params_b(const llama_hparams & hparams, int64_t n_vocab) {
+    const int64_t n_embd = hparams.n_embd;
+    const int64_t n_ff = hparams.n_ff();
+    const int64_t n_layer = hparams.n_layer;
+
+    // Attention: 4 weight matrices per layer (Q, K, V, O) each ~d*d
+    const int64_t attn_params = 4 * n_embd * n_embd * n_layer;
+    // FFN: 3 weight matrices per layer (gate, up, down) each ~d*n_ff
+    const int64_t ffn_params = 3 * n_embd * n_ff * n_layer;
+    // Embeddings: input + output
+    const int64_t emb_params = 2 * n_vocab * n_embd;
+
+    return (float)(attn_params + ffn_params + emb_params) / 1e9f;
+}
+
+// Get the appropriate HIFI type based on model size for Q4_K_HIFI
+static ggml_type get_hifi_enhanced_type(float model_params_b) {
+    if (model_params_b <= 5.0f) {
+        return GGML_TYPE_Q5_K_HIFI_RES8;
+    } else {
+        return GGML_TYPE_Q6_K_HIFI_RES8;
+    }
+}
+
+// Get the HIFI type for Q5_K_HIFI
+static ggml_type get_q5_hifi_enhanced_type(float model_params_b) {
+    if (model_params_b <= 2.0f) {
+        return GGML_TYPE_Q6_K;
+    } else if (model_params_b <= 5.0f) {
+        return GGML_TYPE_Q5_K_HIFI_RES8;
+    } else {
+        return GGML_TYPE_Q6_K_HIFI_RES8;
+    }
+}
+
+// Get the percentage of attn_v layers to enhance based on model size
+static float get_hifi_enhancement_threshold(float model_params_b) {
+    if (model_params_b <= 1.0f) {
+        return 0.32f;
+    } else if (model_params_b <= 2.0f) {
+        return 0.25f;
+    } else if (model_params_b <= 5.0f) {
+        return 0.20f;
+    } else if (model_params_b <= 15.0f) {
+        return 0.20f;
+    } else {
+        return 0.0f;
+    }
+}
+
+// Get the percentage of ffn_gate layers to enhance for tiny models
+static float get_hifi_ffn_gate_threshold(float model_params_b) {
+    if (model_params_b <= 1.0f) {
+        return 0.18f;
+    } else {
+        return 0.0f;
+    }
+}
+
+// ===========================================================================
+// Lever 3: Statistical Outlier Detection using 3sigma rule
+// ===========================================================================
+static float compute_outlier_ratio(const float * weights, int64_t n) {
+    if (weights == nullptr || n <= 0) {
+        return 0.0f;
+    }
+
+    double mean = 0.0;
+    double m2 = 0.0;
+    for (int64_t i = 0; i < n; ++i) {
+        double x = (double)weights[i];
+        double delta = x - mean;
+        mean += delta / (double)(i + 1);
+        double delta2 = x - mean;
+        m2 += delta * delta2;
+    }
+
+    double variance = m2 / (double)n;
+    if (variance <= 0.0) return 0.0f;
+
+    double stddev = sqrt(variance);
+    double threshold = 3.0 * stddev;
+
+    int64_t outlier_count = 0;
+    for (int64_t i = 0; i < n; ++i) {
+        if (fabs((double)weights[i] - mean) > threshold) {
+            outlier_count++;
+        }
+    }
+
+    return (float)outlier_count / (float)n;
+}
+
+// Get the outlier ratio threshold for HIFI enhancement based on model size
+static float get_q5_hifi_outlier_threshold(float model_params_b) {
+    if (model_params_b <= 1.0f) {
+        return 0.08f;
+    } else if (model_params_b <= 2.0f) {
+        return 0.06f;
+    } else if (model_params_b <= 5.0f) {
+        return 0.04f;
+    } else if (model_params_b <= 10.0f) {
+        return 0.025f;
+    } else {
+        return 0.015f;
+    }
+}
+
+// ===========================================================================
+// Lever 1: Adaptive Enhancement by Model Scale for Q5_K_HIFI
+// ===========================================================================
+static int get_q5_hifi_max_enhancements(float model_params_b) {
+    if (model_params_b <= 1.0f) {
+        return 2;
+    } else if (model_params_b <= 2.0f) {
+        return 3;
+    } else if (model_params_b <= 5.0f) {
+        return 5;
+    } else if (model_params_b <= 10.0f) {
+        return 6;
+    } else {
+        return 5;
+    }
+}
+
+// Get Q5_K_HIFI enhancement threshold for attn_v layers
+static float get_q5_hifi_attn_v_threshold(float model_params_b) {
+    if (model_params_b <= 1.7f) {
+        return 0.0f;
+    } else if (model_params_b <= 5.0f) {
+        return 0.05f;
+    } else if (model_params_b <= 10.0f) {
+        return 0.08f;
+    } else {
+        return 0.05f;
+    }
+}
+
+// ===========================================================================
+// Q3_K_HIFI Scale-Aware Enhancement Logic
+// ===========================================================================
+
+// Get the percentage of attn_v layers to enhance for Q3_K_HIFI
+static float get_q3_hifi_attn_v_threshold(float model_params_b) {
+    if (model_params_b <= 1.0f) {
+        return 0.0f;
+    } else if (model_params_b <= 2.0f) {
+        return 0.07f;
+    } else if (model_params_b <= 5.0f) {
+        return 0.25f;
+    } else if (model_params_b <= 10.0f) {
+        return 0.15f;
+    } else if (model_params_b <= 20.0f) {
+        return 0.08f;
+    } else {
+        return 0.05f;
+    }
+}
+
+// Get the enhancement type for Q3_K_HIFI attn_v layers based on model size
+static ggml_type get_q3_hifi_attn_v_type(float model_params_b) {
+    if (model_params_b <= 2.0f) {
+        return GGML_TYPE_Q4_K;
+    } else if (model_params_b <= 10.0f) {
+        return GGML_TYPE_Q5_K;
+    } else {
+        return GGML_TYPE_Q5_K;
+    }
+}
+
+// Get the enhancement type for Q3_K_HIFI ffn_down layers based on model size
+static ggml_type get_q3_hifi_ffn_down_type(float model_params_b, int i_layer, int n_layer) {
+    if (i_layer < n_layer / 16) {
+        return GGML_TYPE_Q5_K;
+    }
+
+    if (model_params_b <= 1.7f) {
+        return GGML_TYPE_Q4_K;
+    }
+
+    return GGML_TYPE_Q4_K;
+}
+
+// ===========================================================================
+// IMATRIX-GUIDED TENSOR SELECTION HELPERS
+// ===========================================================================
+
+// Check if a tensor is a Q3_K_HIFI candidate (input projection, not output)
+static bool is_q3_hifi_candidate(const std::string & name) {
+    bool is_output_projection =
+        name.find("o_proj") != std::string::npos ||
+        name.find("attn_output") != std::string::npos ||
+        name.find("down_proj") != std::string::npos ||
+        name.find("ffn_down") != std::string::npos ||
+        name.find("output.weight") != std::string::npos ||
+        name.find("lm_head") != std::string::npos ||
+        name.find("ssm_out") != std::string::npos;
+
+    if (is_output_projection) {
+        return false;
+    }
+
+    bool is_input_projection =
+        name.find("q_proj") != std::string::npos ||
+        name.find("k_proj") != std::string::npos ||
+        name.find("v_proj") != std::string::npos ||
+        name.find("gate_proj") != std::string::npos ||
+        name.find("up_proj") != std::string::npos ||
+        name.find("attn_q") != std::string::npos ||
+        name.find("attn_k") != std::string::npos ||
+        name.find("attn_v") != std::string::npos ||
+        name.find("ffn_gate") != std::string::npos ||
+        name.find("ffn_up") != std::string::npos ||
+        name.find("wqkv") != std::string::npos ||
+        name.find("qkv") != std::string::npos;
+
+    return is_input_projection;
+}
+
+// Get model-size-aware imatrix guidance threshold
+static float get_imatrix_guidance_threshold(float model_params_b) {
+    if (model_params_b <= 2.0f) {
+        return 0.0f;
+    } else if (model_params_b <= 5.0f) {
+        return 0.30f;
+    } else if (model_params_b <= 10.0f) {
+        return 0.20f;
+    } else if (model_params_b <= 20.0f) {
+        return 0.15f;
+    } else {
+        return 0.10f;
+    }
+}
+
+// Compute importance threshold from collected tensor importance scores
+static float compute_importance_threshold(
+    const std::vector<tensor_importance_entry> & entries,
+    float top_percent
+) {
+    if (entries.empty() || top_percent <= 0.0f) {
+        return 1.0f;
+    }
+
+    std::vector<float> importance_values;
+    importance_values.reserve(entries.size());
+    for (const auto & e : entries) {
+        if (e.is_candidate) {
+            importance_values.push_back(e.importance);
+        }
+    }
+
+    if (importance_values.empty()) {
+        return 1.0f;
+    }
+
+    std::sort(importance_values.begin(), importance_values.end(), std::greater<float>());
+
+    size_t cutoff_idx = (size_t)(importance_values.size() * top_percent);
+    if (cutoff_idx >= importance_values.size()) {
+        cutoff_idx = importance_values.size() - 1;
+    }
+
+    return importance_values[cutoff_idx];
 }
 
 static std::string remap_layer(const std::string & orig_name, const std::vector<int> & prune, std::map<int, std::string> & mapped, int & next_id) {
@@ -454,6 +744,28 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                      ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
                 new_type = GGML_TYPE_Q5_K;
             }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
+                const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+                new_type = get_hifi_enhanced_type(model_params_b);
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI) {
+                const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+                new_type = get_q5_hifi_enhanced_type(model_params_b);
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
+                new_type = GGML_TYPE_Q6_K;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
+                const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+                new_type = GGML_TYPE_Q6_K;
+                (void)model_params_b; // Suppress unused warning - kept for future tuning
+            }
+            // K_LITE output.weight: bump one tier higher within LITE family
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_LITE) { new_type = GGML_TYPE_Q3_K_LITE; }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_LITE) { new_type = GGML_TYPE_Q4_K_LITE; }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_LITE) { new_type = GGML_TYPE_Q5_K_LITE; }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_LITE) { new_type = GGML_TYPE_Q6_K_LITE; }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q6_K_LITE) { new_type = GGML_TYPE_Q8_0; }
             else if (new_type != GGML_TYPE_Q8_0) {
                 new_type = GGML_TYPE_Q6_K;
             }
@@ -483,6 +795,30 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0) {
                 new_type = GGML_TYPE_Q4_K;
             }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
+                const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+                new_type = get_hifi_enhanced_type(model_params_b);
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI) {
+                const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+                new_type = get_q5_hifi_enhanced_type(model_params_b);
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
+                new_type = GGML_TYPE_Q4_K;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
+                const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+                if (model_params_b > 1.7f) {
+                    new_type = GGML_TYPE_Q6_K;
+                }
+                // else: tiny models skip - use default_type (Q3_K), matching Q3_K_M
+            }
+            // K_LITE token_embd: bump one tier higher within LITE family
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_LITE) { new_type = GGML_TYPE_Q3_K_LITE; }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_LITE) { new_type = GGML_TYPE_Q4_K_LITE; }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_LITE) { new_type = GGML_TYPE_Q5_K_LITE; }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_LITE) { new_type = GGML_TYPE_Q6_K_LITE; }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_Q6_K_LITE) { new_type = GGML_TYPE_Q8_0; }
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
                ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
@@ -527,9 +863,39 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M) {
             new_type = qs.i_attention_wv < 2 ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
         }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
+            new_type = GGML_TYPE_Q3_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
+            new_type = qs.i_attention_wv < 2 ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
+            const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+            const float enhancement_threshold = get_hifi_enhancement_threshold(model_params_b);
+            const ggml_type hifi_type = get_hifi_enhanced_type(model_params_b);
+
+            if (qs.i_attention_wv <= qs.n_attention_wv * enhancement_threshold) {
+                new_type = hifi_type;
+            } else if (use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) {
+                new_type = GGML_TYPE_Q6_K;
+            } else {
+                new_type = GGML_TYPE_Q4_K_HIFI;
+            }
+        }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L) new_type = GGML_TYPE_Q5_K;
         else if ((ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS) && qs.model.hparams.n_gqa() >= 4) {
             new_type = GGML_TYPE_Q5_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI) {
+            const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+            const float enhancement_threshold = get_q5_hifi_attn_v_threshold(model_params_b);
+
+            if (enhancement_threshold > 0.0f && qs.i_attention_wv <= qs.n_attention_wv * enhancement_threshold) {
+                new_type = get_q5_hifi_enhanced_type(model_params_b);
+            } else if (use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) {
+                new_type = GGML_TYPE_Q6_K;
+            }
+            // else: use default Q5_K for non-critical middle/late layers
         }
         else if ((ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M) &&
                 use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) new_type = GGML_TYPE_Q6_K;
@@ -569,6 +935,8 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         auto info = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
         int i_layer = info.first, n_layer = info.second;
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) new_type = GGML_TYPE_Q3_K;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_LITE) new_type = GGML_TYPE_Q3_K_LITE;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S) {
             if (i_layer < n_layer/8) new_type = GGML_TYPE_Q4_K;
         }
@@ -580,6 +948,12 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                      : arch != LLM_ARCH_FALCON || use_more_bits(i_layer, n_layer) ? GGML_TYPE_Q4_K
                      : GGML_TYPE_Q3_K;
         }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
+            // Q3_K_HIFI: Match Q3_K_M strategy exactly, then upgrade Q3_K to Q3_K_HIFI
+            new_type = i_layer < n_layer/16 ? GGML_TYPE_Q5_K
+                     : arch != LLM_ARCH_FALCON || use_more_bits(i_layer, n_layer) ? GGML_TYPE_Q4_K
+                     : GGML_TYPE_Q3_K;  // Only FALCON with !use_more_bits gets Q3_K (will be upgraded to Q3_K_HIFI)
+        }
         else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_M && (i_layer < n_layer/8 ||
                     (qs.model.hparams.n_expert == 8 && use_more_bits(i_layer, n_layer)))) {
             new_type = GGML_TYPE_Q4_K;
@@ -587,7 +961,8 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L) {
             new_type = arch == LLM_ARCH_FALCON ? GGML_TYPE_Q4_K : GGML_TYPE_Q5_K;
         }
-        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M) {
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
+            // Q4_K_HIFI follows Q4_K_M behavior for ffn_down
             if (arch == LLM_ARCH_FALCON) {
                 new_type = i_layer < n_layer/16 ? GGML_TYPE_Q6_K :
                            use_more_bits(i_layer, n_layer) ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
@@ -598,7 +973,10 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         else if (i_layer < n_layer/8 && (ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS) && !qs.has_imatrix) {
             new_type = GGML_TYPE_Q5_K;
         }
-        else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M && use_more_bits(i_layer, n_layer)) new_type = GGML_TYPE_Q6_K;
+        else if ((ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI) && use_more_bits(i_layer, n_layer)) {
+            // Q5_K_HIFI follows Q5_K_M behavior for ffn_down - Q6_K for critical layers
+            new_type = GGML_TYPE_Q6_K;
+        }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S && arch != LLM_ARCH_FALCON && i_layer < n_layer/8) {
             new_type = GGML_TYPE_Q5_K;
         }
@@ -616,13 +994,18 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                 if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K   || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS ||
                     ftype == LLAMA_FTYPE_MOSTLY_Q3_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL  ||
                     ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ3_S  ||
-                    ftype == LLAMA_FTYPE_MOSTLY_IQ3_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS) {
+                    ftype == LLAMA_FTYPE_MOSTLY_IQ3_M  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS ||
+                    ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI ||
+                    ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
                     new_type = GGML_TYPE_Q5_K;
                 }
             } else {
                 if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K   ) new_type = GGML_TYPE_Q3_K;
+                else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) new_type = GGML_TYPE_Q3_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) new_type = GGML_TYPE_IQ3_S;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M ) new_type = GGML_TYPE_Q4_K;
+                else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) new_type = GGML_TYPE_Q4_K;  // Match Q3_K_M
+                else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) new_type = GGML_TYPE_Q4_K_HIFI;  // Medium-sensitivity
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L ) new_type = GGML_TYPE_Q5_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_M  ) new_type = GGML_TYPE_Q4_K;
             }
@@ -630,18 +1013,29 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L) new_type = GGML_TYPE_Q4_K;
         }
     }
-    else if (category == tensor_category::ATTENTION_QKV) {
+    else if (name.find("attn_qkv.weight") != std::string::npos) {
         if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L || ftype == LLAMA_FTYPE_MOSTLY_IQ3_M) {
             new_type = GGML_TYPE_Q4_K;
         }
-        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M) new_type = GGML_TYPE_Q5_K;
-        else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M) new_type = GGML_TYPE_Q6_K;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) new_type = GGML_TYPE_Q5_K;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI) new_type = GGML_TYPE_Q6_K;
     }
     else if (category == tensor_category::FFN_GATE) {
         auto info = layer_info(qs.i_ffn_gate, qs.n_ffn_gate, name.c_str());
         int i_layer = info.first, n_layer = info.second;
         if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ3_XXS;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
+            const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+            const float ffn_gate_threshold = get_hifi_ffn_gate_threshold(model_params_b);
+
+            if (ffn_gate_threshold > 0.0f && i_layer <= n_layer * ffn_gate_threshold) {
+                const ggml_type hifi_type = get_hifi_enhanced_type(model_params_b);
+                new_type = hifi_type;
+            } else {
+                new_type = GGML_TYPE_Q4_K_HIFI;
+            }
         }
         ++qs.i_ffn_gate;
     }
@@ -651,7 +1045,223 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ3_XXS;
         }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
+            new_type = GGML_TYPE_Q4_K_HIFI;
+        }
         ++qs.i_ffn_up;
+    }
+
+    // === Q3_K_HIFI: Upgrade Q3_K to Q3_K_HIFI ONLY for safe input-heavy layers ===
+    if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI && new_type == GGML_TYPE_Q3_K) {
+        bool is_output_projection =
+            name.find("o_proj") != std::string::npos ||
+            name.find("attn_output") != std::string::npos ||
+            name.find("down_proj") != std::string::npos ||
+            name.find("ffn_down") != std::string::npos ||
+            tensor_name_match_output_weight(name.c_str()) ||
+            name.find("lm_head") != std::string::npos ||
+            name.find("ssm_out") != std::string::npos;
+
+        if (is_output_projection) {
+            new_type = GGML_TYPE_Q4_K;
+            const char * debug_env = getenv("Q3_K_HIFI_DEBUG");
+            if (debug_env) {
+                static int skip_count = 0;
+                skip_count++;
+                if (skip_count <= 10) {
+                    LLAMA_LOG_INFO("Q3_K_HIFI: Excluding output projection '%s' from Q3_K_HIFI, using Q4_K instead (count: %d)\n",
+                                  name.c_str(), skip_count);
+                }
+            }
+        } else {
+            const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+
+            bool is_safe_for_q3_k_hifi = false;
+            bool used_imatrix_guidance = false;
+
+            bool is_candidate = is_q3_hifi_candidate(name);
+
+            if (g_imatrix_guided_enabled && is_candidate) {
+                auto it = g_tensor_importance_map.find(name);
+                if (it != g_tensor_importance_map.end()) {
+                    float tensor_importance = it->second;
+                    is_safe_for_q3_k_hifi = (tensor_importance >= g_importance_threshold);
+                    used_imatrix_guidance = true;
+
+                    const char * debug_env = getenv("Q3_K_HIFI_DEBUG");
+                    if (debug_env) {
+                        static int imatrix_log_count = 0;
+                        if (imatrix_log_count++ < 20) {
+                            LLAMA_LOG_INFO("Q3_K_HIFI: imatrix-guided '%s' imp=%.3f threshold=%.3f -> %s\n",
+                                          name.c_str(), tensor_importance, g_importance_threshold,
+                                          is_safe_for_q3_k_hifi ? "Q3_K_HIFI" : "Q4_K");
+                        }
+                    }
+                }
+            }
+
+            if (!used_imatrix_guidance) {
+                if (model_params_b <= 2.0f) {
+                    is_safe_for_q3_k_hifi = false;
+                } else if (model_params_b <= 10.0f) {
+                    is_safe_for_q3_k_hifi =
+                        name.find("q_proj") != std::string::npos ||
+                        name.find("k_proj") != std::string::npos ||
+                        name.find("v_proj") != std::string::npos ||
+                        name.find("gate_proj") != std::string::npos ||
+                        name.find("up_proj") != std::string::npos ||
+                        name.find("attn_q") != std::string::npos ||
+                        name.find("attn_k") != std::string::npos ||
+                        name.find("attn_v") != std::string::npos ||
+                        name.find("ffn_gate") != std::string::npos ||
+                        name.find("ffn_up") != std::string::npos ||
+                        name.find("wqkv") != std::string::npos ||
+                        name.find("qkv") != std::string::npos;
+                } else {
+                    is_safe_for_q3_k_hifi =
+                        name.find("q_proj") != std::string::npos ||
+                        name.find("k_proj") != std::string::npos ||
+                        name.find("gate_proj") != std::string::npos ||
+                        name.find("attn_q") != std::string::npos ||
+                        name.find("attn_k") != std::string::npos ||
+                        name.find("ffn_gate") != std::string::npos;
+                }
+            }
+
+            // For ffn_down: only allow Q3_K_HIFI if Q3_K_M would use Q3_K (FALCON with !use_more_bits)
+            if (name.find("ffn_down") != std::string::npos) {
+                auto info = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
+                int i_layer = info.first, n_layer = info.second;
+                if (arch == LLM_ARCH_FALCON && !use_more_bits(i_layer, n_layer)) {
+                    is_safe_for_q3_k_hifi = true;
+                } else {
+                    is_safe_for_q3_k_hifi = false;
+                }
+            }
+
+            if (is_safe_for_q3_k_hifi) {
+                static int upgrade_count = 0;
+                static bool debug_logged = false;
+                const char * debug_env = getenv("Q3_K_HIFI_DEBUG");
+                if (debug_env && !debug_logged) {
+                    LLAMA_LOG_INFO("Q3_K_HIFI: Debug enabled - will upgrade Q3_K tensors to Q3_K_HIFI (only safe input layers)\n");
+                    debug_logged = true;
+                }
+                new_type = GGML_TYPE_Q3_K_HIFI;
+                upgrade_count++;
+                if (debug_env && upgrade_count <= 10) {
+                    LLAMA_LOG_INFO("Q3_K_HIFI: Upgraded tensor '%s' from Q3_K to Q3_K_HIFI (count: %d)\n",
+                                  name.c_str(), upgrade_count);
+                }
+            } else {
+                new_type = GGML_TYPE_Q4_K;
+                const char * debug_env = getenv("Q3_K_HIFI_DEBUG");
+                if (debug_env) {
+                    static int unknown_count = 0;
+                    unknown_count++;
+                    if (unknown_count <= 10) {
+                        LLAMA_LOG_INFO("Q3_K_HIFI: Unknown tensor '%s' - using Q4_K instead of Q3_K_HIFI (count: %d)\n",
+                                      name.c_str(), unknown_count);
+                    }
+                }
+            }
+        }
+    }
+
+    // === Q2_K_HIFI: Upgrade Q2_K to Q2_K_HIFI for critical input-heavy layers ===
+    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI && new_type == GGML_TYPE_Q2_K) {
+        bool is_output_projection =
+            name.find("o_proj") != std::string::npos ||
+            name.find("attn_output") != std::string::npos ||
+            name.find("down_proj") != std::string::npos ||
+            name.find("ffn_down") != std::string::npos ||
+            name == "output.weight" ||
+            name.find("lm_head") != std::string::npos;
+
+        if (!is_output_projection) {
+            const float model_params_b = compute_model_params_b(qs.model.hparams, qs.model.vocab.n_tokens());
+
+            bool upgrade_to_hifi = false;
+
+            if (model_params_b <= 2.0f) {
+                upgrade_to_hifi =
+                    name.find("q_proj") != std::string::npos ||
+                    name.find("k_proj") != std::string::npos ||
+                    name.find("attn_q") != std::string::npos ||
+                    name.find("attn_k") != std::string::npos;
+            } else if (model_params_b <= 10.0f) {
+                upgrade_to_hifi =
+                    name.find("q_proj") != std::string::npos ||
+                    name.find("k_proj") != std::string::npos ||
+                    name.find("attn_q") != std::string::npos ||
+                    name.find("attn_k") != std::string::npos ||
+                    name.find("wqkv") != std::string::npos ||
+                    name.find("qkv") != std::string::npos;
+            } else {
+                upgrade_to_hifi =
+                    name.find("q_proj") != std::string::npos ||
+                    name.find("k_proj") != std::string::npos ||
+                    name.find("v_proj") != std::string::npos ||
+                    name.find("attn_q") != std::string::npos ||
+                    name.find("attn_k") != std::string::npos ||
+                    name.find("attn_v") != std::string::npos ||
+                    name.find("wqkv") != std::string::npos ||
+                    name.find("qkv") != std::string::npos;
+            }
+
+            if (upgrade_to_hifi) {
+                new_type = GGML_TYPE_Q2_K_HIFI;
+                if (getenv("Q2_K_HIFI_DEBUG")) {
+                    LLAMA_LOG_INFO("Q2_K_HIFI: Upgraded '%s' from Q2_K to Q2_K_HIFI (model=%.1fB)\n",
+                                  name.c_str(), model_params_b);
+                }
+            }
+        }
+    }
+
+    bool convert_incompatible_tensor = false;
+    {
+        const int64_t nx = tensor->ne[0];
+        const int64_t ny = tensor->ne[1];
+        const int64_t qk_k = ggml_blck_size(new_type);
+
+        if (nx % qk_k != 0) {
+            LLAMA_LOG_WARN("\n\n%s : tensor cols %" PRId64 " x %" PRId64 " are not divisible by %" PRId64 ", required for %s", __func__, nx, ny, qk_k, ggml_type_name(new_type));
+            convert_incompatible_tensor = true;
+        }
+    }
+
+    if (convert_incompatible_tensor) {
+        switch (new_type) {
+            case GGML_TYPE_TQ1_0:
+            case GGML_TYPE_TQ2_0:  new_type = GGML_TYPE_Q4_0; break;  // TODO: use a symmetric type instead
+            case GGML_TYPE_IQ2_XXS:
+            case GGML_TYPE_IQ2_XS:
+            case GGML_TYPE_IQ2_S:
+            case GGML_TYPE_IQ3_XXS:
+            case GGML_TYPE_IQ3_S:
+            case GGML_TYPE_IQ1_S:
+            case GGML_TYPE_IQ1_M:
+            case GGML_TYPE_Q2_K:
+            case GGML_TYPE_Q2_K_HIFI:
+            case GGML_TYPE_Q2_K_LITE:
+            case GGML_TYPE_Q3_K:
+            case GGML_TYPE_Q3_K_HIFI:
+            case GGML_TYPE_Q3_K_LITE:
+            case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
+            case GGML_TYPE_Q4_K:
+            case GGML_TYPE_Q4_K_LITE: new_type = GGML_TYPE_Q5_0; break;
+            case GGML_TYPE_Q5_K:
+            case GGML_TYPE_Q5_K_LITE: new_type = GGML_TYPE_Q5_1; break;
+            case GGML_TYPE_Q6_K:
+            case GGML_TYPE_Q6_K_LITE: new_type = GGML_TYPE_Q8_0; break;
+            default: throw std::runtime_error("\nUnsupported tensor size encountered\n");
+        }
+        if (tensor->ne[0] % ggml_blck_size(new_type) != 0) {
+            new_type = GGML_TYPE_F16;
+        }
+        LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
+        ++qs.n_fallback;
     }
 
     return new_type;
@@ -706,10 +1316,17 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
 // quantization implementation
 //
 
-static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread) {
+// Overload with HIFI context support
+static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread, const ggml_hifi_quant_context * hifi_ctx = nullptr) {
     if (nthread < 2) {
-        // single-thread
+        // single-thread - set context directly
+        if (hifi_ctx) {
+            ggml_hifi_set_context(hifi_ctx);
+        }
         size_t new_size = ggml_quantize_chunk(new_type, f32_data, new_data, 0, nrows, n_per_row, imatrix);
+        if (hifi_ctx) {
+            ggml_hifi_set_context(nullptr);
+        }
         if (!ggml_validate_row_data(new_type, new_data, new_size)) {
             throw std::runtime_error("quantized data validation failed");
         }
@@ -721,7 +1338,12 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     size_t new_size = 0;
     bool valid = true;
     auto compute = [&mutex, &counter, &new_size, &valid, new_type, f32_data, new_data, chunk_size,
-            nrows, n_per_row, imatrix]() {
+            nrows, n_per_row, imatrix, hifi_ctx]() {
+        // Set HIFI context for this thread
+        if (hifi_ctx) {
+            ggml_hifi_set_context(hifi_ctx);
+        }
+
         const int64_t nrows_per_chunk = chunk_size / n_per_row;
         size_t local_size = 0;
         while (true) {
@@ -746,6 +1368,11 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
                 valid = false;
                 break;
             }
+        }
+
+        // Clear HIFI context for this thread
+        if (hifi_ctx) {
+            ggml_hifi_set_context(nullptr);
         }
     };
     for (int it = 0; it < nthread - 1; ++it) {
@@ -826,8 +1453,21 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ1_M:   return GGML_TYPE_IQ1_M;
         case LLAMA_FTYPE_MOSTLY_IQ4_NL:  return GGML_TYPE_IQ4_NL;
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:  return GGML_TYPE_IQ4_XS;
-        case LLAMA_FTYPE_MOSTLY_IQ3_S:
+        case LLAMA_FTYPE_MOSTLY_IQ3_S:   return GGML_TYPE_IQ3_S;
         case LLAMA_FTYPE_MOSTLY_IQ3_M:   return GGML_TYPE_IQ3_S;
+
+        // HIFI types
+        case LLAMA_FTYPE_MOSTLY_Q4_K_HIFI: return GGML_TYPE_Q4_K;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_HIFI: return GGML_TYPE_Q5_K;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_HIFI: return GGML_TYPE_Q3_K;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_HIFI: return GGML_TYPE_Q2_K_HIFI;
+
+        // LITE types
+        case LLAMA_FTYPE_MOSTLY_Q2_K_LITE: return GGML_TYPE_Q2_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_LITE: return GGML_TYPE_Q3_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_LITE: return GGML_TYPE_Q4_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_LITE: return GGML_TYPE_Q5_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_LITE: return GGML_TYPE_Q6_K_LITE;
 
         default: return GGML_TYPE_COUNT;
     }
@@ -934,6 +1574,13 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     gguf_set_kv     (ctx_out.get(), ml.metadata);
     gguf_set_val_u32(ctx_out.get(), "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
     gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LLM_KV
+
+    // Set quantization type string for Hugging Face model card display
+    if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
+        gguf_set_val_str(ctx_out.get(), "general.quantization_type", "Q4_K_HIFI");
+    } else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI) {
+        gguf_set_val_str(ctx_out.get(), "general.quantization_type", "Q5_K_HIFI");
+    }
 
     // Remove split metadata
     gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str());
@@ -1237,14 +1884,128 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 const int64_t nchunk = (nelements_matrix + chunk_size - 1)/chunk_size;
                 const int64_t nthread_use = nthread > 1 ? std::max((int64_t)1, std::min((int64_t)nthread, nchunk)) : 1;
 
-                // quantize each expert separately since they have different importance matrices
-                new_size = 0;
+            // quantize each expert separately since they have different importance matrices
+            new_size = 0;
+
+            // Set up HIFI context for Q6_K_HIFI_RES8, Q5_K_HIFI_RES8, and Q3_K_HIFI tensors
+            ggml_hifi_quant_context hifi_ctx = {};
+            const ggml_hifi_quant_context * hifi_ctx_ptr = nullptr;
+
+            // Compute model size in billions (needed for Q3_K_HIFI and other HIFI types)
+            const int64_t n_embd = model->hparams.n_embd;
+            const int64_t n_ff = model->hparams.n_ff();
+            const int64_t n_vocab = model->vocab.n_tokens();
+            const int64_t n_layer = model->hparams.n_layer;
+            const int64_t attn_params = 4 * n_embd * n_embd * n_layer;
+            const int64_t ffn_params = 3 * n_embd * n_ff * n_layer;
+            const int64_t emb_params = 2 * n_vocab * n_embd;
+            const float model_params_b = (float)(attn_params + ffn_params + emb_params) / 1e9f;
+
+            // Handle Q3_K_HIFI: model-size-aware + imatrix-guided outlier allocation
+            const bool is_q3_hifi = (new_type == GGML_TYPE_Q3_K_HIFI);
+            const bool is_q3_hifi_ftype = (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI);
+            if (is_q3_hifi && is_q3_hifi_ftype) {
+                int base_outliers = ggml_q3_hifi_get_max_outliers(model_params_b);
+
+                float tensor_importance = 0.5f;
+                if (g_imatrix_guided_enabled) {
+                    auto it = g_tensor_importance_map.find(std::string(tensor->name));
+                    if (it != g_tensor_importance_map.end()) {
+                        tensor_importance = it->second;
+
+                        if (tensor_importance >= 0.7f) {
+                            base_outliers = std::min(base_outliers + 2, Q3_K_HIFI_MAX_OUTLIERS);
+                        } else if (tensor_importance < 0.4f) {
+                            base_outliers = std::max(base_outliers - 2, 2);
+                        }
+                    }
+                }
+
+                ggml_q3_hifi_set_tensor_outliers(base_outliers);
+                ggml_q3_hifi_set_tensor_importance(tensor_importance);
+
+                hifi_ctx.outlier_count = base_outliers;
+                hifi_ctx.layer_importance = tensor_importance;
+                hifi_ctx.layer_idx = -1;
+                hifi_ctx.total_layers = (int)n_layer;
+                hifi_ctx.is_active = 1;
+                hifi_ctx.model_params_b = model_params_b;
+                hifi_ctx_ptr = &hifi_ctx;
+
+                if (g_imatrix_guided_enabled) {
+                    LLAMA_LOG_INFO("(Q3_K_HIFI: model=%.1fB, imp=%.2f, outliers=%d) ",
+                                  model_params_b, tensor_importance, base_outliers);
+                } else if (base_outliers == 0) {
+                    LLAMA_LOG_INFO("(Q3_K_HIFI: model=%.1fB, skipping outliers - too small) ", model_params_b);
+                } else {
+                    LLAMA_LOG_INFO("(Q3_K_HIFI: model=%.1fB, max_outliers=%d) ", model_params_b, base_outliers);
+                }
+            }
+
+            // Handle both Q6_K_HIFI_RES8 and Q5_K_HIFI_RES8 HIFI types (layer-adaptive)
+            const bool is_hifi_type = (new_type == GGML_TYPE_Q6_K_HIFI_RES8 || new_type == GGML_TYPE_Q5_K_HIFI_RES8);
+            const bool is_hifi_ftype = (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI);
+            if (is_hifi_type && is_hifi_ftype) {
+                int layer_idx = -1;
+                if (sscanf(tensor->name, "blk.%d.", &layer_idx) != 1) {
+                    layer_idx = -1;
+                }
+
+                const int n_layers = (int)model->hparams.n_layer;
+
+                float layer_importance = 0.5f;
+                if (imatrix && n_per_row > 0) {
+                    layer_importance = ggml_hifi_compute_tensor_importance(imatrix, n_per_row);
+                }
+
+                const int max_outliers = (new_type == GGML_TYPE_Q5_K_HIFI_RES8)
+                    ? Q5_K_HIFI_RES8_MAX_OUTLIERS : Q6_K_HIFI_RES8_MAX_OUTLIERS;
+                int outlier_count;
+                if (layer_idx < 0) {
+                    outlier_count = max_outliers;
+                } else {
+                    outlier_count = ggml_hifi_compute_outlier_count(
+                        layer_idx, n_layers, layer_importance, model_params_b
+                    );
+                    if (outlier_count > max_outliers) outlier_count = max_outliers;
+                }
+
+                hifi_ctx.outlier_count = outlier_count;
+                hifi_ctx.layer_importance = layer_importance;
+                hifi_ctx.layer_idx = layer_idx;
+                hifi_ctx.total_layers = n_layers;
+                hifi_ctx.is_active = 1;
+                hifi_ctx.model_params_b = model_params_b;
+                hifi_ctx_ptr = &hifi_ctx;
+
+                const char * type_name = (new_type == GGML_TYPE_Q5_K_HIFI_RES8) ? "Q5_K_HIFI" : "Q6_K_HIFI";
+                LLAMA_LOG_INFO("(%s: model=%.1fB layer=%d/%d imp=%.2f outliers=%d) ",
+                    type_name, model_params_b, layer_idx, n_layers, layer_importance, outlier_count);
+            }
+
+            // Handle Q4_K_HIFI type - set per-tensor outlier count via TLS
+            if (new_type == GGML_TYPE_Q4_K_HIFI) {
+                int q4_outliers = ggml_q4_hifi_get_max_outliers(model_params_b);
+
+                if (imatrix && n_per_row > 0) {
+                    float importance = ggml_hifi_compute_tensor_importance(imatrix, n_per_row);
+                    if (importance > 0.7f) {
+                        q4_outliers = Q4_K_HIFI_MAX_OUTLIERS;
+                    } else if (importance < 0.3f) {
+                        q4_outliers = (q4_outliers > 2) ? q4_outliers - 2 : 2;
+                    }
+                }
+
+                ggml_q3_hifi_set_tensor_outliers(q4_outliers);  // Reuse Q3 TLS infrastructure
+                LLAMA_LOG_INFO("(Q4_K_HIFI: model=%.1fB outliers=%d) ", model_params_b, q4_outliers);
+            }
+
                 for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
                     const float * f32_data_03 = f32_data + i03 * nelements_matrix;
                     void * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row) * i03 * nrows;
                     const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
 
-                    new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
+                    new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use, hifi_ctx_ptr);
                 }
                 LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
             }

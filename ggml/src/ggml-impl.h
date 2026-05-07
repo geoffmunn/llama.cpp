@@ -552,6 +552,37 @@ static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     return (uint8_t) ((ue4m3_exp << 3) | ue4m3_man);
 }
 
+// E4M3 FP8 format conversion for Q5_K_HIFI residual scales
+static inline float ggml_e4m3_to_fp32(uint8_t e4m3) {
+    if (e4m3 == 0) return 0.0f;
+    const int sign     = (e4m3 >> 7) & 0x01;
+    const int exp      = (e4m3 >> 3) & 0x0F;
+    const int mantissa = e4m3 & 0x07;
+    const float m_frac = (float)mantissa / 8.0f;
+    const float value = (1.0f + m_frac) * exp2f((float)exp - 7.0f);
+    return sign ? -value : value;
+}
+
+static inline uint8_t ggml_fp32_to_e4m3(float f) {
+    if (f == 0.0f) return 0;
+    const int sign = (f < 0.0f) ? 1 : 0;
+    f = fabsf(f);
+    const int exp_unbias = (int)floorf(log2f(f));
+    int exp = exp_unbias + 7;
+    if (exp < 0) exp = 0;
+    if (exp > 15) exp = 15;
+    const float scale = exp2f((float)exp - 7.0f);
+    float mantissa_f = (f / scale) - 1.0f;
+    if (mantissa_f < 0.0f) mantissa_f = 0.0f;
+    if (mantissa_f >= 1.0f) mantissa_f = 0.999f;
+    const int mantissa = (int)roundf(mantissa_f * 8.0f);
+    const int mantissa_clamped = (mantissa > 7) ? 7 : mantissa;
+    return (uint8_t)((sign << 7) | (exp << 3) | mantissa_clamped);
+}
+
+#define GGML_E4M3_TO_FP32(x) ggml_e4m3_to_fp32(x)
+#define GGML_FP32_TO_E4M3(x) ggml_fp32_to_e4m3(x)
+
 /**
  * Converts brain16 to float32.
  *
