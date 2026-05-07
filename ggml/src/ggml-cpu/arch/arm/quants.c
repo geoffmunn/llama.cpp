@@ -4308,7 +4308,7 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 
 #if defined(__ARM_NEON)
 // NEON-optimized dequantization for Q3_K_HIFI (sparse layout)
-void dequantize_row_q3_k_hifi_neon(const block_q3_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+static void dequantize_row_q3_k_hifi_neon(const block_q3_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % Q3_K_HIFI_BLOCK_SIZE == 0);
     const int64_t nb = k / Q3_K_HIFI_BLOCK_SIZE;
 
