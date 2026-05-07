@@ -1315,6 +1315,10 @@ void ggml_vec_dot_q5_k_hifi_res8_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
     *s = sumf;
 }
 
+void quantize_row_q3_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q3_k_hifi_res8_ref(x, (block_q3_k_hifi_res8 *)y, k);
+}
+
 // Wrapper for quantize_row_q5_k_hifi_res8 (simple version)
 void quantize_row_q5_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q5_k_hifi_res8_ref(x, (block_q5_k_hifi_res8 *)y, k);
@@ -1692,9 +1696,6 @@ void ggml_vec_dot_q2_k_lite_q8_K_generic(int n, float * GGML_RESTRICT s, size_t 
 void quantize_row_q2_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q2_k_lite_ref(x, (block_q2_k_lite *)y, k);
 }
-
-++ b/ggml/src/ggml-cpu/repack.cpp
-
 
 void ggml_vec_dot_iq2_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);

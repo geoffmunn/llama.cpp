@@ -1,7 +1,7 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 #include "ggml-quants.h"
-#include "../../ggml-quants-hifi.h"
+#include "../../../ggml-quants-hifi.h"
 #include "ggml-impl.h"
 #include "ggml-cpu.h"
 #include "simd-mappings.h"
@@ -2529,25 +2529,6 @@ void ggml_vec_dot_q6_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, cons
     ggml_vec_dot_q6_k_lite_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 }
 
-void ggml_vec_dot_q6_k_hifi_dynamic_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    ggml_vec_dot_q6_k_hifi_dynamic_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
-}
-
-void ggml_vec_dot_q6_k_hifi_res8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    ggml_vec_dot_q6_k_hifi_res8_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
-}
-
-void ggml_vec_dot_q5_k_hifi_res8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    ggml_vec_dot_q5_k_hifi_res8_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
-}
-
-void quantize_row_q5_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-    quantize_row_q5_k_hifi_res8_ref(x, (block_q5_k_hifi_res8 *)y, k);
-}
-
-size_t quantize_q5_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
-    return quantize_q5_k_hifi_res8_ex(src, dst, nrows, n_per_row, imatrix, Q5_K_HIFI_RES8_MAX_OUTLIERS);
-}
 
 #if defined (__AVX__) || defined (__AVX2__)
 static const int8_t keven_signs_q2xs[1024] = {

@@ -4236,19 +4236,25 @@ void dequantize_row_q6_k_lite(const block_q6_k_lite * GGML_RESTRICT x, float * G
             for (int r = 0; r < rc; ++r) {
                 yb[x[ib].residual_idx[r]] += scale * (float)x[ib].residual_vals[r];
             }
+        }
     }
 }
+
 size_t quantize_q6_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
                              int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     const size_t row_size = ggml_row_size(GGML_TYPE_Q6_K_LITE, n_per_row);
+
     float model_params_b = 4.0f;
     const ggml_hifi_quant_context * hifi_ctx = ggml_hifi_get_context();
     if (hifi_ctx && hifi_ctx->is_active) {
         model_params_b = hifi_ctx->model_params_b;
+    }
+
     int residual_budget = Q6_K_LITE_MAX_RESIDUALS;
     if (quant_weights) {
         float importance = ggml_hifi_compute_tensor_importance(quant_weights, nrow * n_per_row);
         residual_budget = ggml_lite_get_residual_budget(importance, model_params_b, Q6_K_LITE_MAX_RESIDUALS);
+    }
 
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrow; ++row) {
@@ -4257,41 +4263,65 @@ size_t quantize_q6_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
                                       residual_budget);
         src  += n_per_row;
         qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
 // ---------------------------------------------------------------------------
 // Q3_K_LITE
 // ---------------------------------------------------------------------------
+
 static void quantize_row_q3_k_lite_inner(const float * GGML_RESTRICT x, block_q3_k_lite * GGML_RESTRICT y,
                                            int64_t k, const float * qw, int residual_budget) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
     if (residual_budget < 0) residual_budget = 0;
     if (residual_budget > Q3_K_LITE_MAX_RESIDUALS) residual_budget = Q3_K_LITE_MAX_RESIDUALS;
+
     float dequant[QK_K];
     float score[QK_K];
     int   indices[Q3_K_LITE_MAX_RESIDUALS];
     float residuals[Q3_K_LITE_MAX_RESIDUALS];
+
     for (int64_t ib = 0; ib < nb; ++ib) {
         const float * xb = x + ib * QK_K;
         block_q3_k_lite * block = &y[ib];
+
         quantize_row_q2_K_ref(xb, (block_q2_K *)block, QK_K);
+
         if (residual_budget == 0) {
             block->residual_count = 0;
             block->residual_scale = GGML_FP32_TO_FP16(0.0f);
             memset(block->residual_idx,  0, Q3_K_LITE_MAX_RESIDUALS);
             memset(block->residual_vals, 0, Q3_K_LITE_MAX_RESIDUALS);
+            continue;
+        }
+
         dequantize_row_q2_K((const block_q2_K *)block, dequant, QK_K);
+
         for (int i = 0; i < QK_K; ++i) {
             float err = xb[i] - dequant[i];
             score[i] = fabsf(err) * (qw ? qw[i + ib * QK_K] : 1.0f);
+        }
+
         lite_select_top_n(score, QK_K, indices, residual_budget);
 
         for (int k_idx = 0; k_idx < residual_budget; ++k_idx) {
             residuals[k_idx] = xb[indices[k_idx]] - dequant[indices[k_idx]];
+        }
+
         lite_encode_residuals(residuals, indices, residual_budget, Q3_K_LITE_MAX_RESIDUALS,
                                &block->residual_count, block->residual_idx, block->residual_vals, &block->residual_scale);
+    }
+}
+
 void quantize_row_q3_k_lite_ref(const float * GGML_RESTRICT x, block_q3_k_lite * GGML_RESTRICT y, int64_t k) {
     quantize_row_q3_k_lite_inner(x, y, k, NULL, Q3_K_LITE_MAX_RESIDUALS);
 }
 
 void dequantize_row_q3_k_lite(const block_q3_k_lite * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
     for (int64_t ib = 0; ib < nb; ++ib) {
         float * yb = y + ib * QK_K;
         dequantize_row_q2_K((const block_q2_K *)&x[ib], yb, QK_K);
@@ -4300,19 +4330,27 @@ void dequantize_row_q3_k_lite(const block_q3_k_lite * GGML_RESTRICT x, float * G
             const float scale = GGML_FP16_TO_FP32(x[ib].residual_scale);
             for (int r = 0; r < rc; ++r) {
                 yb[x[ib].residual_idx[r]] += scale * (float)x[ib].residual_vals[r];
+            }
+        }
+    }
+}
+
 size_t quantize_q3_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
                              int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     const size_t row_size = ggml_row_size(GGML_TYPE_Q3_K_LITE, n_per_row);
+
     float model_params_b = 4.0f;
     const ggml_hifi_quant_context * hifi_ctx = ggml_hifi_get_context();
     if (hifi_ctx && hifi_ctx->is_active) {
         model_params_b = hifi_ctx->model_params_b;
     }
+
     int residual_budget = Q3_K_LITE_MAX_RESIDUALS;
     if (quant_weights) {
         float importance = ggml_hifi_compute_tensor_importance(quant_weights, nrow * n_per_row);
         residual_budget = ggml_lite_get_residual_budget(importance, model_params_b, Q3_K_LITE_MAX_RESIDUALS);
     }
+
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrow; ++row) {
         quantize_row_q3_k_lite_inner(src, (block_q3_k_lite *)qrow, n_per_row,
@@ -4326,34 +4364,46 @@ size_t quantize_q3_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
 // ---------------------------------------------------------------------------
 // Q2_K_LITE  (only 3 residuals -- same pattern, smaller budget)
 // ---------------------------------------------------------------------------
+
 static void quantize_row_q2_k_lite_inner(const float * GGML_RESTRICT x, block_q2_k_lite * GGML_RESTRICT y,
                                            int64_t k, const float * qw, int residual_budget) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
     if (residual_budget < 0) residual_budget = 0;
     if (residual_budget > Q2_K_LITE_MAX_RESIDUALS) residual_budget = Q2_K_LITE_MAX_RESIDUALS;
+
     float dequant[QK_K];
     float score[QK_K];
     int   indices[Q2_K_LITE_MAX_RESIDUALS];
     float residuals[Q2_K_LITE_MAX_RESIDUALS];
+
     for (int64_t ib = 0; ib < nb; ++ib) {
         const float * xb = x + ib * QK_K;
         block_q2_k_lite * block = &y[ib];
+
         quantize_row_q2_K_ref(xb, (block_q2_K *)block, QK_K);
+
         if (residual_budget == 0) {
             block->residual_count = 0;
             block->residual_scale = GGML_FP32_TO_FP16(0.0f);
             memset(block->residual_idx,  0, Q2_K_LITE_MAX_RESIDUALS);
             memset(block->residual_vals, 0, Q2_K_LITE_MAX_RESIDUALS);
+            continue;
+        }
+
         dequantize_row_q2_K((const block_q2_K *)block, dequant, QK_K);
 
         for (int i = 0; i < QK_K; ++i) {
             float err = xb[i] - dequant[i];
             score[i] = fabsf(err) * (qw ? qw[i + ib * QK_K] : 1.0f);
+        }
+
         lite_select_top_n(score, QK_K, indices, residual_budget);
 
         for (int k_idx = 0; k_idx < residual_budget; ++k_idx) {
             residuals[k_idx] = xb[indices[k_idx]] - dequant[indices[k_idx]];
+        }
+
         lite_encode_residuals(residuals, indices, residual_budget, Q2_K_LITE_MAX_RESIDUALS,
                                &block->residual_count, block->residual_idx, block->residual_vals, &block->residual_scale);
     }
@@ -4374,19 +4424,26 @@ void dequantize_row_q2_k_lite(const block_q2_k_lite * GGML_RESTRICT x, float * G
             const float scale = GGML_FP16_TO_FP32(x[ib].residual_scale);
             for (int r = 0; r < rc; ++r) {
                 yb[x[ib].residual_idx[r]] += scale * (float)x[ib].residual_vals[r];
+            }
+        }
     }
 }
+
 size_t quantize_q2_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
                              int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     const size_t row_size = ggml_row_size(GGML_TYPE_Q2_K_LITE, n_per_row);
+
     float model_params_b = 4.0f;
     const ggml_hifi_quant_context * hifi_ctx = ggml_hifi_get_context();
     if (hifi_ctx && hifi_ctx->is_active) {
         model_params_b = hifi_ctx->model_params_b;
+    }
+
     int residual_budget = Q2_K_LITE_MAX_RESIDUALS;
     if (quant_weights) {
         float importance = ggml_hifi_compute_tensor_importance(quant_weights, nrow * n_per_row);
         residual_budget = ggml_lite_get_residual_budget(importance, model_params_b, Q2_K_LITE_MAX_RESIDUALS);
+    }
 
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrow; ++row) {
@@ -4395,7 +4452,9 @@ size_t quantize_q2_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
                                       residual_budget);
         src  += n_per_row;
         qrow += row_size;
-
+    }
+    return nrow * row_size;
+}
 
 static void quantize_row_q4_0_impl(const float * GGML_RESTRICT x, block_q4_0 * GGML_RESTRICT y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK4_0 == 32, "QK4_0 must be 32");
