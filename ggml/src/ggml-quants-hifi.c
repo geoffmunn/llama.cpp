@@ -180,11 +180,13 @@ static __thread float g_attn_v_threshold = 0.0f;
 typedef struct {
     int   outlier_count;
     float importance;
+    float importance_weight;
 } ggml_hifi_tensor_state;
 
 static __thread ggml_hifi_tensor_state g_hifi_tensor_tls = {
-    .outlier_count = 0,
-    .importance    = 0.0f,
+    .outlier_count     = 0,
+    .importance        = 0.0f,
+    .importance_weight = 1.0f,
 };
 
 GGML_API void ggml_q3_hifi_set_tensor_outliers(int outliers) {
@@ -209,9 +211,18 @@ GGML_API float ggml_q3_hifi_get_tensor_importance(void) {
     return g_hifi_tensor_tls.importance;
 }
 
+GGML_API void ggml_q3_hifi_set_tensor_importance_weight(float importance_weight) {
+    g_hifi_tensor_tls.importance_weight = importance_weight;
+}
+
+GGML_API float ggml_q3_hifi_get_tensor_importance_weight(void) {
+    return g_hifi_tensor_tls.importance_weight;
+}
+
 GGML_API void ggml_q3_hifi_reset_tensor_state(void) {
-    g_hifi_tensor_tls.outlier_count = 0;
-    g_hifi_tensor_tls.importance    = 0.0f;
+    g_hifi_tensor_tls.outlier_count     = 0;
+    g_hifi_tensor_tls.importance        = 0.0f;
+    g_hifi_tensor_tls.importance_weight = 1.0f;
 }
 
 float ggml_q3_hifi_get_attn_v_threshold(float model_params_b) {
