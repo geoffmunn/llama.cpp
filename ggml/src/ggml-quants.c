@@ -5725,3 +5725,55 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
         x += Q3_K_HIFI_BLOCK_SIZE;
     }
 }
+
+void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % Q3_K_HIFI_BLOCK_SIZE == 0);
+    const int nb = k / Q3_K_HIFI_BLOCK_SIZE;
+
+    for (int i = 0; i < nb; i++) {
+        const uint8_t * hmask = x[i].q3_k_data;
+        const uint8_t * qs    = x[i].q3_k_data + 32;
+        const uint8_t * bsc   = x[i].q3_k_data + 32 + 64;
+        const ggml_half * bd  = (const ggml_half *)(x[i].q3_k_data + 32 + 64 + 12);
+
+        const float d_all = GGML_FP16_TO_FP32(*bd);
+
+        // Decode the 16 group scales (same encoding as quantize)
+        float d[16];
+        for (int j = 0; j < 16; ++j) {
+            int sc = j < 8 ? bsc[j] & 0xF : bsc[j - 8] >> 4;
+            sc = (sc | (((bsc[8 + j % 4] >> (2 * (j / 4))) & 3) << 4)) - 32;
+            d[j] = d_all * sc;
+        }
+
+        // Dequantize the base 3-bit data (same layout as Q3_K)
+        uint8_t m = 1;
+        for (int n = 0; n < Q3_K_HIFI_BLOCK_SIZE; n += 128) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                for (int l = 0; l < 16; ++l) {
+                    int v = (int)((qs[l]       >> shift) & 3);
+                    v = v | ((hmask[l] & m) ? 4 : 0);
+                    y[n + l] = d[j] * (v - 4);
+                }
+                for (int l = 0; l < 16; ++l) {
+                    int v = (int)((qs[l + 16] >> shift) & 3);
+                    v = v | ((hmask[l + 16] & m) ? 4 : 0);
+                    y[n + 16 + l] = d[j + 4] * (v - 4);
+                }
+                shift += 2;
+                m <<= 1;
+            }
+            qs += 32;
+        }
+
+        // Restore outlier FP16 values at their stored indices
+        int n_outliers = x[i].outlier_count;
+        for (int j = 0; j < n_outliers; ++j) {
+            int idx = x[i].outlier_idx[j];
+            y[idx] = GGML_FP16_TO_FP32(x[i].outliers[j]);
+        }
+
+        y += Q3_K_HIFI_BLOCK_SIZE;
+    }
+}
