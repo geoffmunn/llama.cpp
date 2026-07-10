@@ -179,3 +179,13 @@ ggml_q3_hifi_size_category ggml_q3_hifi_get_size_category(float model_params_b) 
         return Q3_HIFI_SIZE_LARGE;
     }
 }
+
+int ggml_q3_hifi_get_max_outliers(float model_params_b) {
+    if (model_params_b <= 1.7f) {
+        return 2;
+    } else if (model_params_b <= 8.0f) {
+        return 4;
+    } else {
+        return 8;
+    }
+}
