@@ -6054,7 +6054,7 @@ void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * G
         }
 
         // Restore outlier FP16 values at their stored indices
-        int n_outliers = x[i].outlier_count;
+        int n_outliers = MIN((int)x[i].outlier_count, Q3_K_HIFI_MAX_OUTLIERS);
         for (int j = 0; j < n_outliers; ++j) {
             int idx = x[i].outlier_idx[j];
             y[idx] = GGML_FP16_TO_FP32(x[i].outliers[j]);

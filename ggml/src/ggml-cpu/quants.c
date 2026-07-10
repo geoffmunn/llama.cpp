@@ -1342,7 +1342,7 @@ void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
         sumf += block_dot;
         // Add outlier corrections: replace base Q3_K values with FP16 outliers
         const float q8d = y[i].d;
-        const int n_outliers = x[i].outlier_count;
+        const int n_outliers = MIN((int)x[i].outlier_count, Q3_K_HIFI_MAX_OUTLIERS);
         for (int j = 0; j < n_outliers; ++j) {
             const int idx = x[i].outlier_idx[j];
             const float ox = GGML_FP16_TO_FP32(x[i].outliers[j]);
