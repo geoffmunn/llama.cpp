@@ -4243,3 +4243,41 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 #endif
 }
 
+// ------------------------------------------------------------------
+// Q3_K_HIFI vec_dot — delegates to ARM-optimized ggml_vec_dot_q3_K_q8_K
+// on each embedded q3_k_data block, then adds FP16 outlier FMA corrections.
+// Faster than the generic dequant-based path because the inner loop uses
+// NEON SIMD instead of scalar dequantize.
+// ------------------------------------------------------------------
+void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                                  const void * GGML_RESTRICT vx, size_t bx,
+                                  const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+    const block_q3_k_hifi * GGML_RESTRICT x = (const block_q3_k_hifi *)vx;
+    const block_q8_K      * GGML_RESTRICT y = (const block_q8_K *)vy;
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        float block_dot = 0.0f;
+        // Delegate to the ARM SIMD-optimized Q3_K path
+        ggml_vec_dot_q3_K_q8_K(QK_K, &block_dot, sizeof(float),
+                                &x[i].q3_k_data, sizeof(block_q3_K),
+                                &y[i], sizeof(block_q8_K), 1);
+        sumf += block_dot;
+        // Add outlier corrections: replace base Q3_K values with FP16 outliers
+        const float q8d = y[i].d;
+        const int n_outliers = MIN((int)x[i].outlier_count, Q3_K_HIFI_MAX_OUTLIERS);
+        for (int j = 0; j < n_outliers; ++j) {
+            const int idx = x[i].outlier_idx[j];
+            const float ox = GGML_FP16_TO_FP32(x[i].outliers[j]);
+            sumf += ox * q8d * y[i].qs[idx];
+        }
+    }
+    *s = sumf;
+}
+
