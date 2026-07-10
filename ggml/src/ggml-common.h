@@ -357,6 +357,14 @@ typedef struct {
 } block_q6_K;
 static_assert(sizeof(block_q6_K) == sizeof(ggml_half) + QK_K / 16 + 3*QK_K/4, "wrong q6_K block size/padding");
 
+// Q2_K_HIFI constants
+#define Q2_K_HIFI_BLOCK_SIZE 256
+#define Q2_K_HIFI_OUTLIERS   8
+#define Q2_K_HIFI_INLIERS    248
+#ifndef Q2_K_HIFI_MAX_OUTLIERS
+#define Q2_K_HIFI_MAX_OUTLIERS 8
+#endif
+
 // Q3_K_HIFI constants
 #define Q3_K_HIFI_BLOCK_SIZE 256
 #define Q3_K_HIFI_OUTLIERS   8
@@ -375,6 +383,24 @@ static_assert(sizeof(block_q6_K) == sizeof(ggml_half) + QK_K / 16 + 3*QK_K/4, "w
 
 // Q6_K_HIFI constants
 #define Q6_K_HIFI_OUTLIERS 4
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    uint8_t  q2_k_data[sizeof(block_q2_K)];              // standard Q2_K block (outlier positions zeroed)
+    uint8_t  outlier_idx[Q2_K_HIFI_OUTLIERS];            // 8 indices (0–255), sorted ascending
+    ggml_half outliers[Q2_K_HIFI_OUTLIERS];              // 8 FP16 replacement values
+    uint8_t  outlier_count;                              // actual number of outliers stored (0–8)
+    uint8_t  _pad;                                       // reserved
+} block_q2_k_hifi;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// sizeof(block_q2_K) + 8 + 16 + 2 = 74 + 26 = 100 bytes
+static_assert(sizeof(block_q2_k_hifi) == sizeof(block_q2_K) + Q2_K_HIFI_OUTLIERS
+              + Q2_K_HIFI_OUTLIERS * sizeof(ggml_half) + 2,
+              "wrong q2_k_hifi block size/padding");
 
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(push, 1)
