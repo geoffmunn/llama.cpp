@@ -1,0 +1,3 @@
+#ifndef Q2_K_LITE_BLOCK_SIZE
+#define Q2_K_LITE_BLOCK_SIZE 256
+#endif
