@@ -15,6 +15,8 @@
 #include "ggml-backend.h"
 #include "gguf.h"
 
+#include "ggml/hifi-threshold-config.h"
+
 #include <algorithm>
 #include <cassert>
 #include <cinttypes>
@@ -577,5 +579,16 @@ const char * llama_print_system_info(void) {
     }
 
     return s.c_str();
+}
+
+//
+// HIFI enhanced type selection
+//
+
+static ggml_type get_hifi_enhanced_type(float model_params_b) {
+    if (model_params_b <= HIFI_MODEL_MEDIUM_B) {
+        return GGML_TYPE_Q5_K;
+    }
+    return GGML_TYPE_Q6_K;
 }
 
