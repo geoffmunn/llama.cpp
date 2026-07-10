@@ -4,6 +4,12 @@
 #include "llama-model-loader.h"
 #include "llama-ext.h"
 
+#include "../ggml/src/ggml-common.h"
+
+extern "C" {
+#include "../ggml/src/ggml-quants-hifi.h"
+}
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
