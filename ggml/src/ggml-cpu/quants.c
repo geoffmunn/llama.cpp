@@ -1286,3 +1286,73 @@ void quantize_row_iq4_xs(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
     assert(k % QK_K == 0);
     quantize_iq4_xs(x, y, 1, k, NULL);
 }
+
+// ============================ HIFI / LITE vec_dot kernels
+
+// Generic macro: dequantize one HIFI/LITE block and one Q8_K block to floats,
+// then accumulate their dot product into a running sum.
+#define HIFI_VEC_DOT_Q8K(name, block_type, deq_fn) \
+void name(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, \
+          const void * GGML_RESTRICT vy, size_t by, int nrc) { \
+    assert(nrc == 1); \
+    UNUSED(nrc); \
+    UNUSED(bs); \
+    UNUSED(bx); \
+    UNUSED(by); \
+    assert(n % QK_K == 0); \
+    const int nb = n / QK_K; \
+    const block_type * GGML_RESTRICT x = (const block_type *)vx; \
+    const block_q8_K * GGML_RESTRICT y = (const block_q8_K *)vy; \
+    float sumf = 0.0f; \
+    for (int i = 0; i < nb; ++i) { \
+        float tmp_x[QK_K]; \
+        float tmp_y[QK_K]; \
+        deq_fn(x + i, tmp_x, QK_K); \
+        for (int j = 0; j < QK_K; ++j) tmp_y[j] = y[i].d * y[i].qs[j]; \
+        for (int j = 0; j < QK_K; ++j) sumf += tmp_x[j] * tmp_y[j]; \
+    } \
+    *s = sumf; \
+}
+
+// --- HIFI types (use the _ref dequantize functions where available) ---
+
+// Q2_K_HIFI — implemented via the reference dequantize path:
+HIFI_VEC_DOT_Q8K(ggml_vec_dot_q2_k_hifi_q8_K, block_q2_k_hifi, dequantize_row_q2_k_hifi)
+
+// Q3_K_HIFI — uses the existing SIMD vec_dot on the embedded q3_k_data,
+// then adds outlier FMA corrections (guide-specified optimization).
+void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                                  const void * GGML_RESTRICT vx, size_t bx,
+                                  const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bs);
+    UNUSED(bx);
+    UNUSED(by);
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+    const block_q3_k_hifi * GGML_RESTRICT x = (const block_q3_k_hifi *)vx;
+    const block_q8_K      * GGML_RESTRICT y = (const block_q8_K *)vy;
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        float block_dot = 0.0f;
+        ggml_vec_dot_q3_K_q8_K(QK_K, &block_dot, sizeof(float),
+                                &x[i].q3_k_data, sizeof(block_q3_K),
+                                &y[i], sizeof(block_q8_K), 1);
+        sumf += block_dot;
+        // Add outlier corrections: replace base Q3_K values with FP16 outliers
+        const float q8d = y[i].d;
+        const int n_outliers = x[i].outlier_count;
+        for (int j = 0; j < n_outliers; ++j) {
+            const int idx = x[i].outlier_idx[j];
+            const float ox = GGML_FP16_TO_FP32(x[i].outliers[j]);
+            sumf += ox * q8d * y[i].qs[idx];
+        }
+    }
+    *s = sumf;
+}
+
+// --- LITE types ---
+// (LITE dequantize functions not yet implemented; vec_dot entries added later)
+
+#undef HIFI_VEC_DOT_Q8K
