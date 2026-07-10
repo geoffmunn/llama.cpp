@@ -437,6 +437,7 @@ static_assert(sizeof(block_q6_k_hifi) == sizeof(block_q6_K)
 #define Q6_K_HIFI_DYNAMIC_MIN_OUTLIERS     2
 #define Q6_K_HIFI_DYNAMIC_DEFAULT_OUTLIERS 6
 #define Q6_K_HIFI_EARLY_EXIT_THRESHOLD     4
+#define Q6_K_HIFI_RES8_MAX_OUTLIERS        8
 
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(push, 1)
