@@ -12,4 +12,11 @@ static ggml_type get_hifi_enhanced_type(float model_params_b) {
                                     : GGML_TYPE_Q6_K_HIFI_RES8;
 }
 
+// For Q5_K_HIFI enhancement of critical tensors
+static ggml_type get_q5_hifi_enhanced_type(float model_params_b) {
+    if (model_params_b <= 2.0f) return GGML_TYPE_Q6_K;          // no HIFI overhead
+    if (model_params_b <= 5.0f) return GGML_TYPE_Q5_K_HIFI_RES8;
+    return GGML_TYPE_Q6_K_HIFI_RES8;
+}
+
 #endif // QUANTIZE_H
