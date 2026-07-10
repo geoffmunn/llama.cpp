@@ -295,6 +295,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         case GGML_TYPE_IQ4_NL:
             mmq_supported = true;
             break;
+        // Q3_K_HIFI, Q4_K_HIFI intentionally excluded — uses MMVQ/dequant path instead
         default:
             mmq_supported = false;
             break;
