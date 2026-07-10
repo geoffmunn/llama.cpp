@@ -15,10 +15,21 @@ extern "C" {
 #include <cstring>
 #include <cinttypes>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <regex>
 #include <thread>
 #include <unordered_map>
+
+// Imatrix guidance for Q3_K_HIFI
+struct tensor_importance_entry {
+    std::string name;
+    float importance;
+    bool is_candidate;  // input projection (not o_proj / down_proj)
+};
+static std::map<std::string, float> g_tensor_importance_map;
+static float g_importance_threshold = 0.0f;
+static bool  g_imatrix_guided_enabled = false;
 
 // result of parsing --tensor-type option
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
