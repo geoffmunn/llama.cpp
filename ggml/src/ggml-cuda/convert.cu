@@ -1,6 +1,8 @@
 #include "convert.cuh"
 #include "dequantize.cuh"
 
+#include "../../../src/ggml-backend/kernels/llama.cpp-qtensor-deq-cuda.cuh"
+
 #include <cstdint>
 
 #define CUDA_Q8_0_NE_ALIGN 2048
@@ -785,6 +787,9 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_q2_K_cuda;
         case GGML_TYPE_Q3_K:
             return dequantize_row_q3_K_cuda;
+        case GGML_TYPE_Q3_K_HIFI:
+            // Route large batches through cuBLAS + dequant path
+            return dequantize_row_q3_k_hifi_cuda<float>;
         case GGML_TYPE_Q4_K:
             return dequantize_row_q4_K_cuda;
         case GGML_TYPE_Q5_K:
