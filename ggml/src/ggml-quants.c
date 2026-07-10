@@ -5589,3 +5589,139 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
 
     return true;
 }
+
+// ====================== Q3_K_HIFI reference quantization
+
+void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi * GGML_RESTRICT y, int64_t k) {
+    assert(k % Q3_K_HIFI_BLOCK_SIZE == 0);
+    const int nb = k / Q3_K_HIFI_BLOCK_SIZE;
+
+    int8_t L[Q3_K_HIFI_BLOCK_SIZE];
+    float scales[Q3_K_HIFI_BLOCK_SIZE / 16];
+
+    for (int i = 0; i < nb; i++) {
+        // --- First pass: identify outliers within this 256-element block ---
+        // An element is an outlier if its magnitude significantly exceeds the
+        // rest of its 16-element subgroup.
+        const float outlier_threshold_factor = 3.0f;
+        bool is_outlier[Q3_K_HIFI_BLOCK_SIZE];
+        memset(is_outlier, 0, sizeof(is_outlier));
+        int n_outliers = 0;
+
+        for (int j = 0; j < Q3_K_HIFI_BLOCK_SIZE / 16; ++j) {
+            float amax_sub = 0;
+            for (int ii = 0; ii < 16; ++ii) {
+                float ax = fabsf(x[j * 16 + ii]);
+                if (ax > amax_sub) amax_sub = ax;
+            }
+            if (amax_sub < GROUP_MAX_EPS) continue;
+            float sum_abs = 0;
+            for (int ii = 0; ii < 16; ++ii) {
+                sum_abs += fabsf(x[j * 16 + ii]);
+            }
+            for (int ii = 0; ii < 16; ++ii) {
+                if (!is_outlier[j * 16 + ii]) {
+                    float ax = fabsf(x[j * 16 + ii]);
+                    float median_est = sum_abs / 16.0f;
+                    if (ax > outlier_threshold_factor * median_est && n_outliers < Q3_K_HIFI_OUTLIERS) {
+                        is_outlier[j * 16 + ii] = true;
+                        ++n_outliers;
+                    }
+                }
+            }
+        }
+
+        // Zero out outlier positions; save their FP16 values and indices
+        float x_copy[Q3_K_HIFI_BLOCK_SIZE];
+        memcpy(x_copy, x, Q3_K_HIFI_BLOCK_SIZE * sizeof(float));
+        uint8_t outlier_idx[Q3_K_HIFI_OUTLIERS];
+        ggml_half outlier_val[Q3_K_HIFI_OUTLIERS];
+        int oi = 0;
+        for (int j = 0; j < Q3_K_HIFI_BLOCK_SIZE; ++j) {
+            if (is_outlier[j]) {
+                if (oi < Q3_K_HIFI_OUTLIERS) {
+                    outlier_idx[oi] = (uint8_t)j;
+                    outlier_val[oi] = GGML_FP32_TO_FP16(x[j]);
+                    ++oi;
+                }
+                x_copy[j] = 0.f;
+            }
+        }
+
+        // --- Standard Q3_K quantization on the zeroed-outlier data ---
+        float max_scale = 0;
+        float amax = 0;
+        for (int j = 0; j < Q3_K_HIFI_BLOCK_SIZE / 16; ++j) {
+            scales[j] = make_q3_quants(16, 4, x_copy + 16 * j, L + 16 * j, true);
+            float scale = fabsf(scales[j]);
+            if (scale > amax) {
+                amax = scale; max_scale = scales[j];
+            }
+        }
+
+        // q3_k_data layout mirrors block_q3_K: hmask[32] + qs[64] + scales[12] + d[2] = 110
+        uint8_t * hmask = y[i].q3_k_data;
+        uint8_t * qs    = y[i].q3_k_data + 32;
+        uint8_t * bsc   = y[i].q3_k_data + 32 + 64;
+        ggml_half * bd  = (ggml_half *)(y[i].q3_k_data + 32 + 64 + 12);
+
+        memset(bsc, 0, 12);
+        if (max_scale) {
+            float iscale = -32.f / max_scale;
+            for (int j = 0; j < Q3_K_HIFI_BLOCK_SIZE / 16; ++j) {
+                int8_t l = nearest_int(iscale * scales[j]);
+                l = MAX(-32, MIN(31, l)) + 32;
+                if (j < 8) {
+                    bsc[j] = l & 0xF;
+                } else {
+                    bsc[j - 8] |= ((l & 0xF) << 4);
+                }
+                l >>= 4;
+                bsc[j % 4 + 8] |= (l << (2 * (j / 4)));
+            }
+            *bd = GGML_FP32_TO_FP16(1 / iscale);
+        } else {
+            *bd = GGML_FP32_TO_FP16(0.f);
+        }
+
+        int8_t sc;
+        for (int j = 0; j < Q3_K_HIFI_BLOCK_SIZE / 16; ++j) {
+            sc = j < 8 ? bsc[j] & 0xF : bsc[j - 8] >> 4;
+            sc = (sc | (((bsc[8 + j % 4] >> (2 * (j / 4))) & 3) << 4)) - 32;
+            float d = GGML_FP16_TO_FP32(*bd) * sc;
+            if (!d) continue;
+            for (int ii = 0; ii < 16; ++ii) {
+                int l = nearest_int(x_copy[16 * j + ii] / d);
+                l = MAX(-4, MIN(3, l));
+                L[16 * j + ii] = l + 4;
+            }
+        }
+
+        memset(hmask, 0, Q3_K_HIFI_BLOCK_SIZE / 8);
+        int m = 0;
+        uint8_t hm = 1;
+        for (int j = 0; j < Q3_K_HIFI_BLOCK_SIZE; ++j) {
+            if (L[j] > 3) {
+                hmask[m] |= hm;
+                L[j] -= 4;
+            }
+            if (++m == Q3_K_HIFI_BLOCK_SIZE / 8) {
+                m = 0; hm <<= 1;
+            }
+        }
+        for (int j = 0; j < Q3_K_HIFI_BLOCK_SIZE; j += 128) {
+            for (int l = 0; l < 32; ++l) {
+                qs[j / 4 + l] = L[j + l] | (L[j + l + 32] << 2) |
+                                (L[j + l + 64] << 4) | (L[j + l + 96] << 6);
+            }
+        }
+
+        // Store outlier metadata
+        memcpy(y[i].outlier_idx, outlier_idx, Q3_K_HIFI_OUTLIERS);
+        memcpy(y[i].outliers, outlier_val, Q3_K_HIFI_OUTLIERS * sizeof(ggml_half));
+        y[i].outlier_count = (uint8_t)n_outliers;
+        y[i]._pad = 0;
+
+        x += Q3_K_HIFI_BLOCK_SIZE;
+    }
+}
