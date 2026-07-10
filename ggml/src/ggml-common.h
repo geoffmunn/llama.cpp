@@ -432,6 +432,36 @@ static_assert(sizeof(block_q6_k_hifi) == sizeof(block_q6_K)
               + Q6_K_HIFI_OUTLIERS + Q6_K_HIFI_OUTLIERS * sizeof(ggml_half),
               "wrong q6_k_hifi block size/padding");
 
+// Q6_K_HIFI_DYNAMIC — 236 bytes  (2–8 dynamic outliers)
+#define Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS     8
+#define Q6_K_HIFI_DYNAMIC_MIN_OUTLIERS     2
+#define Q6_K_HIFI_DYNAMIC_DEFAULT_OUTLIERS 6
+#define Q6_K_HIFI_EARLY_EXIT_THRESHOLD     4
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q6_K-compatible region (210 bytes)
+    uint8_t  ql[QK_K/2];
+    uint8_t  qh[QK_K/4];
+    int8_t   scales[QK_K/16];
+    ggml_half d;
+    // Dynamic outlier extension (26 bytes)
+    uint8_t  outlier_count;                                     // 1 byte: actual count (2–8)
+    uint8_t  outlier_idx[Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS];      // 8 bytes
+    uint8_t  _padding;                                         // 1 byte: align for ggml_half
+    ggml_half outlier_vals[Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS];   // 16 bytes
+} block_q6_k_hifi_dynamic;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 210 + 2 + 8 + 16 = 236 bytes
+static_assert(sizeof(block_q6_k_hifi_dynamic) == sizeof(block_q6_K) + 2
+              + Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS
+              + Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS * sizeof(ggml_half),
+              "wrong q6_k_hifi_dynamic block size/padding");
+
 // This is only used for intermediate quantization and dot products
 typedef struct {
     float   d;              // delta
