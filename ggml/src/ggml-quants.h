@@ -107,6 +107,11 @@ GGML_API void iq2xs_free_impl(enum ggml_type type);
 GGML_API void iq3xs_init_impl(int grid_size);
 GGML_API void iq3xs_free_impl(int grid_size);
 
+// HIFI FP16-outlier types
+GGML_API void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+
 #ifdef __cplusplus
 }
 #endif
