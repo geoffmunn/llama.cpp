@@ -594,6 +594,72 @@ void dequantize_q8_0_t4(device const block_q8_0 *xb, short il, thread type4 & re
     }
 }
 
+// --------------------------------------------------------------------------------------------
+// Q8_0_HIFI dequantization kernels
+//
+// Follows the HIFI pattern: base q8_0 data + per-block outlier indices + FP16 replacement values.
+// Dequantize the base 8-bit data, then restore outlier FP16 values at their stored indices.
+//
+// Assumes block_q8_0_hifi layout (matching ggml-common.h GGML_COMMON_DECL_METAL path):
+//   ggml_half  d;
+//   int8_t     qs[QK8_0];                // 32 quants (outlier positions zeroed)
+//   uint8_t    outlier_idx[Q8_0_HIFI_OUTLIERS];
+//   ggml_half  outliers[Q8_0_HIFI_OUTLIERS];
+//   uint8_t    outlier_count;
+
+#define Q8_0_HIFI_OUTLIERS 8
+
+typedef struct {
+    ggml_half  d;
+    int8_t    qs[QK8_0];
+    uint8_t   outlier_idx[Q8_0_HIFI_OUTLIERS];
+    ggml_half outliers[Q8_0_HIFI_OUTLIERS];
+    uint8_t   outlier_count;
+} block_q8_0_hifi;
+
+template <typename type4x4>
+void dequantize_q8_0_hifi(device const block_q8_0_hifi *xb, short il, thread type4x4 & reg) {
+    device const int8_t * qs = ((device const int8_t *)xb->qs);
+    const float d = half2float(xb->d);
+
+    float4x4 reg_f;
+
+    for (int i = 0; i < 16; i++) {
+        reg_f[i/4][i%4] = (qs[i + 16*il] * d);
+    }
+
+    // Restore outlier FP16 values at their stored indices
+    const int n_outliers = MIN((int)xb->outlier_count, Q8_0_HIFI_OUTLIERS);
+    for (int j = 0; j < n_outliers; ++j) {
+        int idx = xb->outlier_idx[j];
+        if (idx >= 0 && idx < 16) {
+            reg_f[idx/4][idx%4] = half2float(xb->outliers[j]);
+        }
+    }
+
+    reg = (type4x4) reg_f;
+}
+
+template <typename type4>
+void dequantize_q8_0_hifi_t4(device const block_q8_0_hifi *xb, short il, thread type4 & reg) {
+    device const int8_t * qs = ((device const int8_t *)xb->qs);
+    const float d = half2float(xb->d);
+
+    for (int i = 0; i < 4; i++) {
+        reg[i] = (qs[4*(il%4) + i + 16*(il/4)] * d);
+    }
+
+    // Restore outlier FP16 values at their stored indices
+    const int n_outliers = MIN((int)xb->outlier_count, Q8_0_HIFI_OUTLIERS);
+    const int base = 4 * (il % 4);
+    for (int j = 0; j < n_outliers; ++j) {
+        int idx = xb->outlier_idx[j];
+        if (idx >= base && idx < base + 4) {
+            reg[idx - base] = half2float(xb->outliers[j]);
+        }
+    }
+}
+
 template <typename type4x4>
 void dequantize_mxfp4(device const block_mxfp4 * xb, short il, thread type4x4 & reg) {
     device const uint8_t * q2 = (device const uint8_t *)xb->qs;
