@@ -5923,6 +5923,72 @@ void quantize_row_q6_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q6_k_h
     }
 }
 
+void quantize_row_q2_k_hifi_ref(const float * GGML_RESTRICT x, block_q2_k_hifi * GGML_RESTRICT y, int64_t k) {
+    assert(k % Q2_K_HIFI_BLOCK_SIZE == 0);
+    const int nb = k / Q2_K_HIFI_BLOCK_SIZE;
+
+    for (int i = 0; i < nb; i++) {
+        // --- First pass: identify outliers within this 256-element block ---
+        const float outlier_threshold_factor = 3.0f;
+        bool is_outlier[Q2_K_HIFI_BLOCK_SIZE];
+        memset(is_outlier, 0, sizeof(is_outlier));
+        int n_outliers = 0;
+
+        for (int j = 0; j < Q2_K_HIFI_BLOCK_SIZE / 16; ++j) {
+            float amax_sub = 0;
+            for (int ii = 0; ii < 16; ++ii) {
+                float ax = fabsf(x[j * 16 + ii]);
+                if (ax > amax_sub) amax_sub = ax;
+            }
+            if (amax_sub < GROUP_MAX_EPS) continue;
+            float sum_abs = 0;
+            for (int ii = 0; ii < 16; ++ii) {
+                sum_abs += fabsf(x[j * 16 + ii]);
+            }
+            for (int ii = 0; ii < 16; ++ii) {
+                if (!is_outlier[j * 16 + ii]) {
+                    float ax = fabsf(x[j * 16 + ii]);
+                    float median_est = sum_abs / 16.0f;
+                    if (ax > outlier_threshold_factor * median_est && n_outliers < Q2_K_HIFI_OUTLIERS) {
+                        is_outlier[j * 16 + ii] = true;
+                        ++n_outliers;
+                    }
+                }
+            }
+        }
+
+        // Zero out outlier positions; save their FP16 values and indices
+        float x_copy[Q2_K_HIFI_BLOCK_SIZE];
+        memcpy(x_copy, x, Q2_K_HIFI_BLOCK_SIZE * sizeof(float));
+        uint8_t outlier_idx[Q2_K_HIFI_OUTLIERS];
+        ggml_half outlier_val[Q2_K_HIFI_OUTLIERS];
+        int oi = 0;
+        for (int j = 0; j < Q2_K_HIFI_BLOCK_SIZE; ++j) {
+            if (is_outlier[j]) {
+                if (oi < Q2_K_HIFI_OUTLIERS) {
+                    outlier_idx[oi] = (uint8_t)j;
+                    outlier_val[oi] = GGML_FP32_TO_FP16(x[j]);
+                    ++oi;
+                }
+                x_copy[j] = 0.f;
+            }
+        }
+
+        // --- Standard Q2_K quantization on the zeroed-outlier data ---
+        quantize_row_q2_K_ref(x_copy, (block_q2_K *)y[i].q2_k_data, Q2_K_HIFI_BLOCK_SIZE);
+
+        // Store outlier info
+        for (int j = 0; j < oi; ++j) {
+            y[i].outlier_idx[j] = outlier_idx[j];
+            y[i].outliers[j] = outlier_val[j];
+        }
+        y[i].outlier_count = (uint8_t)oi;
+        y[i]._pad = 0;
+
+        x += Q2_K_HIFI_BLOCK_SIZE;
+    }
+}
+
 void dequantize_row_q2_k_hifi(const block_q2_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % Q2_K_HIFI_BLOCK_SIZE == 0);
     const int nb = k / Q2_K_HIFI_BLOCK_SIZE;
@@ -5996,4 +6062,21 @@ void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * G
 
         y += Q3_K_HIFI_BLOCK_SIZE;
     }
+}
+
+// ====================== Q2_K_HIFI bulk quantization
+
+size_t quantize_q2_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    if (!imatrix) {
+        quantize_row_q2_k_hifi_ref(src, dst, (int64_t)nrows * n_per_row);
+        return nrows * ggml_row_size(GGML_TYPE_Q2_K_HIFI, n_per_row);
+    }
+    size_t row_size = ggml_row_size(GGML_TYPE_Q2_K_HIFI, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_q2_k_hifi_ref(src, (block_q2_k_hifi *)qrow, n_per_row);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
 }
