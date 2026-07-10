@@ -5607,6 +5607,23 @@ size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrows * row_size;
 }
 
+// ====================== Q4_K_HIFI bulk quantization
+
+size_t quantize_q4_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    if (!imatrix) {
+        quantize_row_q4_K_ref(src, dst, (int64_t)nrows * n_per_row);
+        return nrows * ggml_row_size(GGML_TYPE_Q4_K_HIFI, n_per_row);
+    }
+    size_t row_size = ggml_row_size(GGML_TYPE_Q4_K_HIFI, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_q4_K_ref(src, (block_q4_K *)qrow, n_per_row);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
+}
+
 // ====================== Q6_K_HIFI_RES8 bulk quantization
 
 size_t quantize_q6_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
