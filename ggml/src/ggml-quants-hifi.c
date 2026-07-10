@@ -187,7 +187,7 @@ static __thread ggml_hifi_tensor_state g_hifi_tensor_tls = {
     .importance    = 0.0f,
 };
 
-void ggml_q3_hifi_set_tensor_outliers(int outliers) {
+GGML_API void ggml_q3_hifi_set_tensor_outliers(int outliers) {
     if (outliers < 0) {
         outliers = 0;
     }
@@ -197,19 +197,19 @@ void ggml_q3_hifi_set_tensor_outliers(int outliers) {
     g_hifi_tensor_tls.outlier_count = outliers;
 }
 
-int ggml_q3_hifi_get_tensor_outliers(void) {
+GGML_API int ggml_q3_hifi_get_tensor_outliers(void) {
     return g_hifi_tensor_tls.outlier_count;
 }
 
-void ggml_q3_hifi_set_tensor_importance(float importance) {
+GGML_API void ggml_q3_hifi_set_tensor_importance(float importance) {
     g_hifi_tensor_tls.importance = importance;
 }
 
-float ggml_q3_hifi_get_tensor_importance(void) {
+GGML_API float ggml_q3_hifi_get_tensor_importance(void) {
     return g_hifi_tensor_tls.importance;
 }
 
-void ggml_q3_hifi_reset_tensor_state(void) {
+GGML_API void ggml_q3_hifi_reset_tensor_state(void) {
     g_hifi_tensor_tls.outlier_count = 0;
     g_hifi_tensor_tls.importance    = 0.0f;
 }
