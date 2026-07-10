@@ -3,10 +3,13 @@
 #include "gguf.h"
 #include "llama.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cinttypes>
 #include <climits>
 #include <cstdarg>
 #include <cstring>
+#include <limits>
 #include <vector>
 #include <sstream>
 
@@ -169,3 +172,72 @@ std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
             return gguf_data_to_str(type, gguf_get_val_data(ctx_gguf, i), 0);
     }
 }
+
+//
+// outlier detection
+//
+
+std::vector<int> llama_find_top_outliers(const float * row,
+                                         int64_t n_per_row,
+                                         int n_outliers,
+                                         const float * imatrix) {
+    if (row == nullptr || n_per_row <= 0 || n_outliers <= 0) {
+        return {};
+    }
+
+    // Clamp requested outlier count
+    if (static_cast<int64_t>(n_outliers) > n_per_row) {
+        n_outliers = static_cast<int>(n_per_row);
+    }
+
+    // --- Stage 1: compute per-element scores ---
+    // score[i] = fabs(weight[i]) * importance[i]
+    std::vector<float> scores(n_per_row);
+    for (int64_t i = 0; i < n_per_row; ++i) {
+        float importance = (imatrix != nullptr) ? fabsf(imatrix[i]) : 1.0f;
+        scores[i] = fabsf(row[i]) * importance;
+    }
+
+    // --- Stage 2: 3-sigma threshold ---
+    float sum = 0.0f;
+    for (float s : scores) {
+        sum += s;
+    }
+    float mean = sum / static_cast<float>(n_per_row);
+
+    float var_sum = 0.0f;
+    for (float s : scores) {
+        float d = s - mean;
+        var_sum += d * d;
+    }
+    float stddev = sqrtf(var_sum / static_cast<float>(n_per_row));
+
+    // Threshold: elements with score > mean + 3*stddev are candidates
+    float threshold = mean + 3.0f * stddev;
+
+    // --- Stage 3: rank candidates by score descending, take top-N ---
+    std::vector<std::pair<float, int>> candidates;
+    candidates.reserve(n_per_row);
+    for (int64_t i = 0; i < n_per_row; ++i) {
+        if (scores[i] > threshold) {
+            candidates.emplace_back(scores[i], static_cast<int>(i));
+        }
+    }
+
+    // Partial sort to get the top-n_outliers by score (descending)
+    int take = std::min(n_outliers, static_cast<int>(candidates.size()));
+    std::partial_sort(candidates.begin(), candidates.begin() + take, candidates.end(),
+                     [](const auto & a, const auto & b) { return a.first > b.first; });
+    candidates.resize(take);
+
+    // Collect indices and sort ascending
+    std::vector<int> result;
+    result.reserve(candidates.size());
+    for (auto & p : candidates) {
+        result.push_back(p.second);
+    }
+    std::sort(result.begin(), result.end());
+
+    return result;
+}
+

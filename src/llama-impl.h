@@ -87,3 +87,29 @@ std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i);
 #define LLAMA_TENSOR_NAME_FATTN   "__fattn__"
 #define LLAMA_TENSOR_NAME_FGDN_AR "__fgdn_ar__"
 #define LLAMA_TENSOR_NAME_FGDN_CH "__fgdn_ch__"
+
+//
+// outlier detection
+//
+
+/**
+ * Identify top-N outlier element indices from a row of weights using
+ * |weight| * imatrix_importance as the selection score.
+ *
+ * Selection uses a two-stage approach:
+ *   1. Compute per-element scores = fabs(weight[i]) * (imatrix ? imatrix[i] : 1.0f)
+ *   2. Apply a 3-sigma threshold on the scores
+ *   3. Rank above-threshold elements by score descending, take up to n_outliers
+ *
+ * The returned vector is sorted ascending by index.
+ *
+ * @param row        pointer to weight data (n_per_row floats)
+ * @param n_per_row  number of elements in the row
+ * @param n_outliers maximum number of outliers to return
+ * @param imatrix    optional importance matrix (per-element weights); NULL to use uniform importance
+ * @return           sorted vector of outlier indices
+ */
+std::vector<int> llama_find_top_outliers(const float * row,
+                                         int64_t n_per_row,
+                                         int n_outliers,
+                                         const float * imatrix);
