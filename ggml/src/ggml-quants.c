@@ -5906,6 +5906,29 @@ void quantize_row_q6_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q6_k_h
     }
 }
 
+void dequantize_row_q2_k_hifi(const block_q2_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % Q2_K_HIFI_BLOCK_SIZE == 0);
+    const int nb = k / Q2_K_HIFI_BLOCK_SIZE;
+
+    for (int i = 0; i < nb; i++) {
+        // Dequantize the base Q2_K data into a temporary buffer
+        float tmp[Q2_K_HIFI_BLOCK_SIZE];
+        dequantize_row_q2_K((const block_q2_K *)x[i].q2_k_data, tmp, Q2_K_HIFI_BLOCK_SIZE);
+
+        // Copy to output
+        memcpy(y, tmp, Q2_K_HIFI_BLOCK_SIZE * sizeof(float));
+
+        // Restore outlier FP16 values at their stored indices
+        int n_outliers = x[i].outlier_count;
+        for (int j = 0; j < n_outliers; ++j) {
+            int idx = x[i].outlier_idx[j];
+            y[idx] = GGML_FP16_TO_FP32(x[i].outliers[j]);
+        }
+
+        y += Q2_K_HIFI_BLOCK_SIZE;
+    }
+}
+
 void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % Q3_K_HIFI_BLOCK_SIZE == 0);
     const int nb = k / Q3_K_HIFI_BLOCK_SIZE;

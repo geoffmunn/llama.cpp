@@ -923,7 +923,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = Q2_K_HIFI_BLOCK_SIZE,
         .type_size                = sizeof(block_q2_k_hifi),
         .is_quantized             = true,
-        .to_float                 = NULL,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q2_k_hifi,
         .from_float_ref           = NULL,
     },
     [36] = { // GGML_TYPE_IQ4_NL_4_4
