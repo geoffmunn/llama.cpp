@@ -5607,6 +5607,20 @@ size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrows * row_size;
 }
 
+// ====================== Q6_K_HIFI_RES8 bulk quantization
+
+size_t quantize_q6_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    size_t row_size = ggml_row_size(GGML_TYPE_Q6_K_HIFI_RES8, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_q6_k_hifi_res8_ref(src, (block_q6_k_hifi_res8 *)qrow, n_per_row);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
+}
+
 // ====================== Q3_K_HIFI reference quantization
 
 void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi * GGML_RESTRICT y, int64_t k) {
@@ -5740,6 +5754,30 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
         y[i]._pad = 0;
 
         x += Q3_K_HIFI_BLOCK_SIZE;
+    }
+}
+
+// ====================== Q6_K_HIFI_RES8 reference quantization
+
+void quantize_row_q6_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q6_k_hifi_res8 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    for (int i = 0; i < nb; ++i) {
+        // Step 1: Quantize with base Q6_K function (no zeroing)
+        quantize_row_q6_K_ref(x, (block_q6_K *)&y[i], QK_K);
+
+        // Step 2: Dequantize the base result immediately
+        float base_decoded[QK_K];
+        dequantize_row_q6_K((const block_q6_K *)&y[i], base_decoded, QK_K);
+
+        // Step 3: Compute per-element errors: err[i] = x[i] - base_decoded[i]
+        float err[QK_K];
+        for (int j = 0; j < QK_K; ++j) {
+            err[j] = x[j] - base_decoded[j];
+        }
+
+        x += QK_K;
     }
 }
 
