@@ -192,3 +192,19 @@ int ggml_q3_hifi_get_max_outliers(float model_params_b) {
         return 8;
     }
 }
+
+int ggml_q3_hifi_get_enhancement_type(float model_params_b, int is_embedding) {
+    // Embedding tensors always get standard enhancement regardless of size.
+    if (is_embedding) {
+        return Q3_HIFI_ENHANCE_STANDARD;
+    }
+
+    // Larger models benefit from stronger enhancement to preserve precision.
+    if (model_params_b > 14.0f) {
+        return Q3_HIFI_ENHANCE_STRONG;
+    } else if (model_params_b > 1.7f) {
+        return Q3_HIFI_ENHANCE_STANDARD;
+    } else {
+        return Q3_HIFI_ENHANCE_NONE;
+    }
+}

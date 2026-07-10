@@ -30,7 +30,15 @@ typedef enum {
     Q3_HIFI_SIZE_LARGE  = 2,  // 14B+
 } ggml_q3_hifi_size_category;
 
+// Q3_K_HIFI enhancement types
+typedef enum {
+    Q3_HIFI_ENHANCE_NONE     = 0,  // no special enhancement
+    Q3_HIFI_ENHANCE_STANDARD = 1,  // standard outlier preservation
+    Q3_HIFI_ENHANCE_STRONG   = 2,  // aggressive outlier + importance weighting
+} ggml_q3_hifi_enhancement_type;
+
 GGML_API ggml_q3_hifi_size_category ggml_q3_hifi_get_size_category(float model_params_b);
+GGML_API int   ggml_q3_hifi_get_enhancement_type(float model_params_b, int is_embedding);
 GGML_API int   ggml_q3_hifi_get_max_outliers(float model_params_b);
 GGML_API float ggml_q3_hifi_get_outlier_threshold(float model_params_b);
 GGML_API float ggml_q3_hifi_compute_outlier_ratio(const float * weights, int64_t n);
