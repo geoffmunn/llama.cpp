@@ -138,3 +138,32 @@ float ggml_hifi_compute_tensor_importance(const float * imatrix_data, int64_t n_
 
     return importance;
 }
+
+// ------------------------------------------------------------------
+// Block-level outlier count from block importance, base count, and model size
+// ------------------------------------------------------------------
+
+int ggml_hifi_compute_block_outlier_count(float block_importance,
+                                           int base_outlier_count, float model_params_b) {
+    // Larger models benefit from more outliers per block to preserve precision.
+    // Scale the base count upward for bigger models.
+    float size_scale = 1.0f;
+    if (model_params_b > 8.0f) {
+        size_scale = 1.25f;
+    }
+    if (model_params_b > 14.0f) {
+        size_scale = 1.5f;
+    }
+
+    // Blend: base count provides the floor, block_importance drives the ceiling.
+    // High-importance blocks get more outliers; low-importance blocks stay near base.
+    float adjusted = (float) base_outlier_count * size_scale
+                   + block_importance * (8.0f - (float) base_outlier_count * size_scale);
+
+    // Round and clamp to [1, 8]
+    int result = (int) (adjusted + 0.5f);
+    if (result < 1) result = 1;
+    if (result > 8) result = 8;
+
+    return result;
+}
