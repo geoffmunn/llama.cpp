@@ -398,9 +398,11 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // sizeof(block_q2_K) + 8 + 16 + 2 = 74 + 26 = 100 bytes
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 static_assert(sizeof(block_q2_k_hifi) == sizeof(block_q2_K) + Q2_K_HIFI_OUTLIERS
               + Q2_K_HIFI_OUTLIERS * sizeof(ggml_half) + 2,
               "wrong q2_k_hifi block size/padding");
+#endif
 
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(push, 1)
@@ -416,9 +418,11 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // 110 + 8 + 16 + 2 = 136 bytes
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 static_assert(sizeof(block_q3_k_hifi) == 110 + Q3_K_HIFI_OUTLIERS
               + Q3_K_HIFI_OUTLIERS * sizeof(ggml_half) + 2,
               "wrong q3_k_hifi block size/padding");
+#endif
 
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(push, 1)
@@ -432,9 +436,11 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // 144 + 8 + 16 = 168 bytes → 5.25 BPW
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 static_assert(sizeof(block_q4_k_hifi) == 144 + Q4_K_HIFI_OUTLIERS
               + Q4_K_HIFI_OUTLIERS * sizeof(ggml_half),
               "wrong q4_k_hifi block size/padding");
+#endif
 
 // Q6_K_HIFI — 222 bytes  (4 outliers; used for critical tensors in Q4_K_HIFI ftype)
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
@@ -454,9 +460,11 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // 210 + 12 = 222 bytes
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 static_assert(sizeof(block_q6_k_hifi) == sizeof(block_q6_K)
               + Q6_K_HIFI_OUTLIERS + Q6_K_HIFI_OUTLIERS * sizeof(ggml_half),
               "wrong q6_k_hifi block size/padding");
+#endif
 
 // Q6_K_HIFI_DYNAMIC — 236 bytes  (2–8 dynamic outliers)
 #define Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS     8
@@ -484,10 +492,12 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // 210 + 2 + 8 + 16 = 236 bytes
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 static_assert(sizeof(block_q6_k_hifi_dynamic) == sizeof(block_q6_K) + 2
               + Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS
               + Q6_K_HIFI_DYNAMIC_MAX_OUTLIERS * sizeof(ggml_half),
               "wrong q6_k_hifi_dynamic block size/padding");
+#endif
 
 // Q6_K_HIFI_RES8 — 232 bytes  (INT8 residual correction for outliers)
 #define Q6_K_HIFI_RES8_BLOCK_SIZE  232
@@ -511,8 +521,10 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // 210 + 22 = 232 bytes
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 static_assert(sizeof(block_q6_k_hifi_res8) == 232,
               "wrong q6_k_hifi_res8 block size/padding");
+#endif
 
 // Q5_K_HIFI_RES8 — 196 bytes  (compact INT8 residual with E4M3 FP8 scale)
 #define Q5_K_HIFI_RES8_MAX_OUTLIERS 8
@@ -540,8 +552,10 @@ typedef struct {
 #pragma pack(pop)
 #endif
 // 176 + 20 = 196 bytes (1+8+8+1+2 = 20 in extension)
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 static_assert(sizeof(block_q5_k_hifi_res8) == 196,
               "wrong q5_k_hifi_res8 block size/padding");
+#endif
 
 // This is only used for intermediate quantization and dot products
 typedef struct {
