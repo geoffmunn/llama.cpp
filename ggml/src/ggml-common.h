@@ -530,6 +530,7 @@ static_assert(sizeof(block_q8_K) == sizeof(float) + QK_K + QK_K/16*sizeof(int16_
 #define Q3_K_LITE_MAX_RESIDUALS 8
 
 #define Q5_K_LITE_BLOCK_SIZE    256
+#define Q5_K_LITE_MAX_RESIDUALS 8
 
 #pragma pack(push, 1)
 typedef struct {
