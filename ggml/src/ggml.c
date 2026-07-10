@@ -7744,6 +7744,19 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q4_K:    result = quantize_q4_K   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_K:    result = quantize_q5_K   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q6_K:    result = quantize_q6_K   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q3_K_HIFI:
+        case GGML_TYPE_Q6_K_HIFI:
+        case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
+        case GGML_TYPE_Q6_K_HIFI_RES8:
+        case GGML_TYPE_Q5_K_HIFI_RES8:
+        case GGML_TYPE_Q3_K_HIFI_RES8:
+        case GGML_TYPE_Q4_K_HIFI:
+        case GGML_TYPE_Q2_K_HIFI:
+        case GGML_TYPE_Q2_K_LITE:
+        case GGML_TYPE_Q3_K_LITE:
+        case GGML_TYPE_Q4_K_LITE:
+        case GGML_TYPE_Q5_K_LITE:
+        case GGML_TYPE_Q6_K_LITE:
         case GGML_TYPE_TQ1_0:   result = quantize_tq1_0  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TQ2_0:   result = quantize_tq2_0  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ2_XXS: result = quantize_iq2_xxs(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
