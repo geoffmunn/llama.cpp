@@ -11,6 +11,8 @@ extern "C" {
 #include "ggml/quantize.h"
 }
 
+#include "tensor-ops.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -22,7 +24,24 @@ extern "C" {
 #include <thread>
 #include <unordered_map>
 
+//
+// HIFI table-driven type resolvers
+//
+// Each HIFI ftype has per-category resolver functions that select the
+// appropriate ggml_type given model size and quantisation state.
+// The lookup table maps (ftype, tensor_category) → resolver function pointer.
+//
+
+// ---- Per-ftype resolver forward declarations (definitions below struct quantize_state_impl) ----
+
+static ggml_type hifi_resolver_q4_attn_v(float model_params_b, const quantize_state_impl * qs);
+static ggml_type hifi_resolver_q5_attn_v(float model_params_b, const quantize_state_impl * qs);
+static ggml_type hifi_resolver_q3_attn_v(float model_params_b, const quantize_state_impl * qs);
+static ggml_type hifi_resolver_q2_attn_v(float model_params_b, const quantize_state_impl * qs);
+
+//
 // Imatrix guidance for Q3_K_HIFI
+//
 struct tensor_importance_entry {
     std::string name;
     float importance;
@@ -55,6 +74,54 @@ enum class tensor_category {
     OUTPUT,
     OTHER
 };
+
+// ---- Lookup tables: one per HIFI ftype (after tensor_category enum is defined) ----
+
+static const hifi_category_entry hifi_table_q4[] = {
+    { tensor_category::ATTENTION_V,     hifi_resolver_q4_attn_v },
+    { tensor_category::ATTENTION_QKV,   hifi_resolver_q4_attn_v },
+    { tensor_category::ATTENTION_KV_B,  hifi_resolver_q4_attn_v },
+};
+
+static const hifi_category_entry hifi_table_q5[] = {
+    { tensor_category::ATTENTION_V,     hifi_resolver_q5_attn_v },
+    { tensor_category::ATTENTION_QKV,   hifi_resolver_q5_attn_v },
+    { tensor_category::ATTENTION_KV_B,  hifi_resolver_q5_attn_v },
+};
+
+static const hifi_category_entry hifi_table_q3[] = {
+    { tensor_category::ATTENTION_V,     hifi_resolver_q3_attn_v },
+    { tensor_category::ATTENTION_QKV,   hifi_resolver_q3_attn_v },
+    { tensor_category::ATTENTION_KV_B,  hifi_resolver_q3_attn_v },
+};
+
+static const hifi_category_entry hifi_table_q2[] = {
+    { tensor_category::ATTENTION_V,     hifi_resolver_q2_attn_v },
+    { tensor_category::ATTENTION_QKV,   hifi_resolver_q2_attn_v },
+    { tensor_category::ATTENTION_KV_B,  hifi_resolver_q2_attn_v },
+};
+
+static const hifi_ftype_config hifi_configs[] = {
+    { LLAMA_FTYPE_MOSTLY_Q4_K_HIFI, hifi_table_q4, std::size(hifi_table_q4) },
+    { LLAMA_FTYPE_MOSTLY_Q5_K_HIFI, hifi_table_q5, std::size(hifi_table_q5) },
+    { LLAMA_FTYPE_MOSTLY_Q3_K_HIFI, hifi_table_q3, std::size(hifi_table_q3) },
+    { LLAMA_FTYPE_MOSTLY_Q2_K_HIFI, hifi_table_q2, std::size(hifi_table_q2) },
+};
+
+// Public resolver: look up the function pointer for a given (ftype, category).
+// Returns nullptr if no entry matches.
+static hifi_category_type_fn hifi_lookup_resolver(llama_ftype ftype, tensor_category category) {
+    for (const auto & cfg : hifi_configs) {
+        if (cfg.ftype != ftype) continue;
+        if (cfg.entries) {
+            for (size_t i = 0; i < cfg.n_entries; ++i) {
+                if (cfg.entries[i].cat == category) return cfg.entries[i].select_type;
+            }
+        }
+        break; // ftype found but category not in table
+    }
+    return nullptr;
+}
 
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
@@ -213,6 +280,44 @@ struct quantize_state_impl {
         }
     }
 };
+
+// ---- Per-ftype resolver implementations (definitions — need full struct layout) ----
+
+static ggml_type hifi_resolver_q4_attn_v(float model_params_b, const quantize_state_impl * qs) {
+    float threshold = get_hifi_enhancement_threshold(model_params_b);
+    if (qs->i_attention_wv <= qs->n_attention_wv * threshold) {
+        return get_hifi_enhanced_type(model_params_b);
+    }
+    auto use_more_bits = [](int i, int n) { return i < n/8 || i >= 7*n/8 || (i - n/8)%3 == 2; };
+    if (use_more_bits(qs->i_attention_wv, qs->n_attention_wv)) return GGML_TYPE_Q6_K;
+    return GGML_TYPE_Q4_K_HIFI;
+}
+
+static ggml_type hifi_resolver_q5_attn_v(float model_params_b, const quantize_state_impl * qs) {
+    float threshold = get_hifi_enhancement_threshold(model_params_b);
+    if (qs->i_attention_wv <= qs->n_attention_wv * threshold) {
+        return get_q5_hifi_enhanced_type(model_params_b);
+    }
+    auto use_more_bits = [](int i, int n) { return i < n/8 || i >= 7*n/8 || (i - n/8)%3 == 2; };
+    if (use_more_bits(qs->i_attention_wv, qs->n_attention_wv)) return GGML_TYPE_Q6_K;
+    return GGML_TYPE_Q5_K;
+}
+
+static ggml_type hifi_resolver_q3_attn_v(float model_params_b, const quantize_state_impl * qs) {
+    float threshold = ggml_q3_hifi_get_attn_v_threshold(model_params_b);
+    ggml_q3_hifi_enhancement_type etype = (ggml_q3_hifi_enhancement_type)ggml_q3_hifi_get_enhancement_type(model_params_b, 0);
+    ggml_type hifi_type = (etype != Q3_HIFI_ENHANCE_NONE) ? GGML_TYPE_Q3_K_HIFI : GGML_TYPE_Q4_K;
+    if (qs->i_attention_wv <= qs->n_attention_wv * threshold) {
+        return hifi_type;
+    }
+    if (qs->i_attention_wv <= 2) return GGML_TYPE_Q5_K;
+    return GGML_TYPE_Q4_K;
+}
+
+// Q2_K_HIFI has no special ATTENTION_V logic — stays at default type.
+static ggml_type hifi_resolver_q2_attn_v(float, const quantize_state_impl *) {
+    return GGML_TYPE_Q2_K_HIFI;
+}
 
 // per-tensor metadata, computed in the preliminary loop and used in the main loop
 struct tensor_metadata {
@@ -554,21 +659,15 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                 use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) new_type = GGML_TYPE_Q6_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S && qs.i_attention_wv < 4) new_type = GGML_TYPE_Q5_K;
         // HIFI enhanced selection for critical attn_v tensors
-        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI ||
+                 ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI ||
+                 ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI ||
+                 ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
             const float model_params_b = (float)qs.model.hparams.n_layer() * (float)qs.model.hparams.n_embd * 8.0f / 1e9f;
-            new_type = get_hifi_enhanced_type(model_params_b);
-        }
-        else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI) {
-            const float model_params_b = (float)qs.model.hparams.n_layer() * (float)qs.model.hparams.n_embd * 8.0f / 1e9f;
-            new_type = get_q5_hifi_enhanced_type(model_params_b);
-        }
-        else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
-            const float model_params_b = (float)qs.model.hparams.n_layer() * (float)qs.model.hparams.n_embd * 8.0f / 1e9f;
-            if (model_params_b <= HIFI_MODEL_MEDIUM_B) new_type = GGML_TYPE_Q5_K;
-            else new_type = GGML_TYPE_Q4_K;
-        }
-        else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
-            new_type = GGML_TYPE_Q3_K;
+            const hifi_category_type_fn resolver = hifi_lookup_resolver(ftype, category);
+            if (resolver) {
+                new_type = resolver(model_params_b, &qs);
+            }
         }
         if (qs.model.type == LLM_TYPE_70B) {
             // In the 70B model we have 8 heads sharing the same attn_v weights. As a result, the attn_v.weight tensor is
