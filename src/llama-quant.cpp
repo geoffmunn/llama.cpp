@@ -775,6 +775,16 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     else if (category == tensor_category::FFN_GATE) {
         auto info = layer_info(qs.i_ffn_gate, qs.n_ffn_gate, name.c_str());
         int i_layer = info.first, n_layer = info.second;
+
+        // Small-model FFN gate special-case handling for HIFI ftypes
+        const float model_params_b = (float)qs.model.hparams.n_layer() *
+                                     (float)qs.model.hparams.n_embd * 8.0f / 1e9f;
+        ggml_type ffn_gate_type = llama_model_check_ffn_gate_hifi(
+            model_params_b, ftype, name.c_str(), i_layer, n_layer);
+        if (ffn_gate_type != GGML_TYPE_COUNT) {
+            new_type = ffn_gate_type;
+        }
+
         if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ3_XXS;
         }
