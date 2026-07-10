@@ -525,6 +525,30 @@ typedef struct {
 } block_q8_K;
 static_assert(sizeof(block_q8_K) == sizeof(float) + QK_K + QK_K/16*sizeof(int16_t), "wrong q8_K block size/padding");
 
+// Q3_K_LITE: Q2_K base + 8 INT8 residuals = 104 bytes (3.25 BPW)
+#define Q3_K_LITE_BLOCK_SIZE    256
+#define Q3_K_LITE_MAX_RESIDUALS 8
+
+#pragma pack(push, 1)
+typedef struct {
+    // Q2_K base (84 bytes)
+    uint8_t scales[QK_K/16];
+    uint8_t qs[QK_K/4];
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    // INT8 extension (20 bytes)
+    uint8_t   residual_count;
+    uint8_t   residual_idx[Q3_K_LITE_MAX_RESIDUALS];  // 8 bytes
+    int8_t    residual_vals[Q3_K_LITE_MAX_RESIDUALS]; // 8 bytes
+    uint8_t   _pad;
+    ggml_half residual_scale;                          // 2 bytes
+} block_q3_k_lite;
+#pragma pack(pop)
+
+static_assert(sizeof(block_q3_k_lite) == 104, "wrong q3_k_lite block size/padding");
+
 // (Almost) "true" 2-bit quantization.
 // Due to the need to use blocks as per ggml design, it ends up using
 // 2.0625 bpw because of the 16-bit scale for each block of 256.
