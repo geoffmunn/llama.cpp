@@ -367,6 +367,7 @@ static_assert(sizeof(block_q6_K) == sizeof(ggml_half) + QK_K / 16 + 3*QK_K/4, "w
 
 // Q4_K_HIFI constants
 #define Q4_K_HIFI_BLOCK_SIZE 256
+#define Q4_K_HIFI_INLIERS    248
 
 // This is only used for intermediate quantization and dot products
 typedef struct {
