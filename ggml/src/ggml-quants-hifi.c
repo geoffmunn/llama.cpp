@@ -100,3 +100,41 @@ float ggml_hifi_compute_block_importance(const float * imatrix_block, int block_
 
     return importance;
 }
+
+// ------------------------------------------------------------------
+// Tensor-level importance from full imatrix data
+// ------------------------------------------------------------------
+
+float ggml_hifi_compute_tensor_importance(const float * imatrix_data, int64_t n_elements) {
+    if (imatrix_data == NULL || n_elements <= 0) {
+        return 0.0f;
+    }
+
+    // Sum absolute values across the entire tensor importance matrix.
+    // This gives a measure of overall signal strength for this weight tensor.
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (int64_t i = 0; i < n_elements; i++) {
+        double v = fabs((double) imatrix_data[i]);
+        sum += v;
+        sum_sq += v * v;
+    }
+
+    // Mean absolute importance
+    double mean_abs = sum / (double) n_elements;
+
+    // RMS importance — captures variance in sensitivity across elements
+    double rms = sqrt(sum_sq / (double) n_elements);
+
+    // Blend: mean gives baseline importance, RMS ratio highlights tensors
+    // with high-variance sensitivity (some weights matter much more than others).
+    float importance = 0.8f * (float) mean_abs + 0.2f * (float) (rms - mean_abs);
+    if (importance < 0.0f) {
+        importance = 0.0f;
+    }
+
+    // Normalize to [0, 1] with soft squashing
+    importance = importance / (1.0f + importance);
+
+    return importance;
+}
