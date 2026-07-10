@@ -8,6 +8,7 @@
 
 extern "C" {
 #include "../ggml/src/ggml-quants-hifi.h"
+#include "ggml/quantize.h"
 }
 
 #include <algorithm>
@@ -552,6 +553,23 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         else if ((ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M) &&
                 use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) new_type = GGML_TYPE_Q6_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S && qs.i_attention_wv < 4) new_type = GGML_TYPE_Q5_K;
+        // HIFI enhanced selection for critical attn_v tensors
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_HIFI) {
+            const float model_params_b = (float)qs.model.hparams.n_layer() * (float)qs.model.hparams.n_embd * 8.0f / 1e9f;
+            new_type = get_hifi_enhanced_type(model_params_b);
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_HIFI) {
+            const float model_params_b = (float)qs.model.hparams.n_layer() * (float)qs.model.hparams.n_embd * 8.0f / 1e9f;
+            new_type = get_q5_hifi_enhanced_type(model_params_b);
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
+            const float model_params_b = (float)qs.model.hparams.n_layer() * (float)qs.model.hparams.n_embd * 8.0f / 1e9f;
+            if (model_params_b <= 5.0f) new_type = GGML_TYPE_Q5_K;
+            else new_type = GGML_TYPE_Q4_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {
+            new_type = GGML_TYPE_Q3_K;
+        }
         if (qs.model.type == LLM_TYPE_70B) {
             // In the 70B model we have 8 heads sharing the same attn_v weights. As a result, the attn_v.weight tensor is
             // 8x smaller compared to attn_q.weight. Hence, we can get a nice boost in quantization accuracy with
@@ -846,6 +864,12 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:  return GGML_TYPE_IQ4_XS;
         case LLAMA_FTYPE_MOSTLY_IQ3_S:
         case LLAMA_FTYPE_MOSTLY_IQ3_M:   return GGML_TYPE_IQ3_S;
+
+        // HIFI types
+        case LLAMA_FTYPE_MOSTLY_Q4_K_HIFI: return GGML_TYPE_Q4_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_HIFI: return GGML_TYPE_Q3_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_HIFI: return GGML_TYPE_Q5_K;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_HIFI: return GGML_TYPE_Q2_K;
 
         default: return GGML_TYPE_COUNT;
     }
