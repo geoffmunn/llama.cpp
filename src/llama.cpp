@@ -592,3 +592,22 @@ static ggml_type get_hifi_enhanced_type(float model_params_b) {
     return GGML_TYPE_Q6_K;
 }
 
+//
+// Map a file type constant to its corresponding GGML type
+//
+
+static ggml_type llama_ftype_to_ggml_type(llama_ftype ftype) {
+    switch (ftype) {
+        case LLAMA_FTYPE_MOSTLY_Q4_K_HIFI:  return GGML_TYPE_Q4_K;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_HIFI:  return GGML_TYPE_Q5_K;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_HIFI:  return GGML_TYPE_Q3_K;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_HIFI:  return GGML_TYPE_Q2_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_LITE:  return GGML_TYPE_Q2_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_LITE:  return GGML_TYPE_Q3_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_LITE:  return GGML_TYPE_Q4_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_LITE:  return GGML_TYPE_Q5_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_LITE:  return GGML_TYPE_Q6_K_LITE;
+        default:                            return GGML_TYPE_F16;
+    }
+}
+
