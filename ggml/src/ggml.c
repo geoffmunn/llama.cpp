@@ -923,6 +923,8 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = Q2_K_HIFI_BLOCK_SIZE,
         .type_size                = sizeof(block_q2_k_hifi),
         .is_quantized             = true,
+        .to_float                 = NULL,
+        .from_float_ref           = NULL,
     },
     [36] = { // GGML_TYPE_IQ4_NL_4_4
         .type_name                = "TYPE_IQ4_NL_4_4 REMOVED, use IQ4_NL with runtime repacking",
