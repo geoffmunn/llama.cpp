@@ -63,3 +63,40 @@ int ggml_hifi_compute_outlier_count(int layer_idx, int total_layers,
 
     return result;
 }
+
+// ------------------------------------------------------------------
+// Block-level importance from imatrix data
+// ------------------------------------------------------------------
+
+float ggml_hifi_compute_block_importance(const float * imatrix_block, int block_size) {
+    if (imatrix_block == NULL || block_size <= 0) {
+        return 0.0f;
+    }
+
+    // Compute the mean absolute value across the block — a measure of how much
+    // "signal" the importance matrix assigns to this region.
+    float sum = 0.0f;
+    for (int i = 0; i < block_size; i++) {
+        sum += fabsf(imatrix_block[i]);
+    }
+    float mean_abs = sum / (float) block_size;
+
+    // Also compute max for outlier awareness
+    float max_val = 0.0f;
+    for (int i = 0; i < block_size; i++) {
+        float v = fabsf(imatrix_block[i]);
+        if (v > max_val) {
+            max_val = v;
+        }
+    }
+
+    // Blend mean and max: mean captures overall importance, max flags blocks
+    // with sparse but extreme values (outlier-prone regions).
+    float importance = 0.7f * mean_abs + 0.3f * max_val;
+
+    // Normalize to [0, 1] — imatrix values are typically small, so we use a
+    // soft sigmoid-like squashing rather than hard clamping.
+    importance = importance / (1.0f + importance);
+
+    return importance;
+}
