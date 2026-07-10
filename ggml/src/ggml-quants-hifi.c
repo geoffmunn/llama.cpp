@@ -175,6 +175,45 @@ int ggml_hifi_compute_block_outlier_count(float block_importance,
 
 static __thread float g_attn_v_threshold = 0.0f;
 
+// --- Per-tensor outlier control (TLS) ---
+
+typedef struct {
+    int   outlier_count;
+    float importance;
+} ggml_hifi_tensor_state;
+
+static __thread ggml_hifi_tensor_state g_hifi_tensor_tls = {
+    .outlier_count = 0,
+    .importance    = 0.0f,
+};
+
+void ggml_q3_hifi_set_tensor_outliers(int outliers) {
+    if (outliers < 0) {
+        outliers = 0;
+    }
+    if (outliers > Q3_K_HIFI_MAX_OUTLIERS) {
+        outliers = Q3_K_HIFI_MAX_OUTLIERS;
+    }
+    g_hifi_tensor_tls.outlier_count = outliers;
+}
+
+int ggml_q3_hifi_get_tensor_outliers(void) {
+    return g_hifi_tensor_tls.outlier_count;
+}
+
+void ggml_q3_hifi_set_tensor_importance(float importance) {
+    g_hifi_tensor_tls.importance = importance;
+}
+
+float ggml_q3_hifi_get_tensor_importance(void) {
+    return g_hifi_tensor_tls.importance;
+}
+
+void ggml_q3_hifi_reset_tensor_state(void) {
+    g_hifi_tensor_tls.outlier_count = 0;
+    g_hifi_tensor_tls.importance    = 0.0f;
+}
+
 float ggml_q3_hifi_get_attn_v_threshold(float model_params_b) {
     // Scale the V-threshold with model size: larger models use a higher
     // threshold to be more selective about which attention values are
