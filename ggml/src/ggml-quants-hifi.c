@@ -167,3 +167,15 @@ int ggml_hifi_compute_block_outlier_count(float block_importance,
 
     return result;
 }
+
+// --- Q3_K_HIFI model-size classification ---
+
+ggml_q3_hifi_size_category ggml_q3_hifi_get_size_category(float model_params_b) {
+    if (model_params_b <= 1.7f) {
+        return Q3_HIFI_SIZE_TINY;
+    } else if (model_params_b <= 8.0f) {
+        return Q3_HIFI_SIZE_MEDIUM;
+    } else {
+        return Q3_HIFI_SIZE_LARGE;
+    }
+}
