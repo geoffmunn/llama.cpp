@@ -171,6 +171,24 @@ int ggml_hifi_compute_block_outlier_count(float block_importance,
     return result;
 }
 
+// --- Attention V-threshold (per-thread) ---
+
+static __thread float g_attn_v_threshold = 0.0f;
+
+float ggml_q3_hifi_get_attn_v_threshold(float model_params_b) {
+    // Scale the V-threshold with model size: larger models use a higher
+    // threshold to be more selective about which attention values are
+    // considered significant.
+    if (model_params_b > 14.0f) {
+        g_attn_v_threshold = 0.8f;
+    } else if (model_params_b > 1.7f) {
+        g_attn_v_threshold = 0.5f;
+    } else {
+        g_attn_v_threshold = 0.3f;
+    }
+    return g_attn_v_threshold;
+}
+
 // --- Q3_K_HIFI model-size classification ---
 
 ggml_q3_hifi_size_category ggml_q3_hifi_get_size_category(float model_params_b) {

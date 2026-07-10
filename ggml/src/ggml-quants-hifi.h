@@ -39,6 +39,7 @@ typedef enum {
 
 GGML_API ggml_q3_hifi_size_category ggml_q3_hifi_get_size_category(float model_params_b);
 GGML_API int   ggml_q3_hifi_get_enhancement_type(float model_params_b, int is_embedding);
+GGML_API float ggml_q3_hifi_get_attn_v_threshold(float model_params_b);
 GGML_API int   ggml_q3_hifi_get_max_outliers(float model_params_b);
 GGML_API float ggml_q3_hifi_get_outlier_threshold(float model_params_b);
 GGML_API float ggml_q3_hifi_compute_outlier_ratio(const float * weights, int64_t n);
