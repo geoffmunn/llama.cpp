@@ -5610,11 +5610,11 @@ size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
 // ====================== Q6_K_HIFI_RES8 bulk quantization
 
 size_t quantize_q6_k_hifi_res8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
-    (void)imatrix;
     size_t row_size = ggml_row_size(GGML_TYPE_Q6_K_HIFI_RES8, n_per_row);
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrows; ++row) {
-        quantize_row_q6_k_hifi_res8_ref(src, (block_q6_k_hifi_res8 *)qrow, n_per_row);
+        const float * row_imatrix = imatrix ? imatrix + row * n_per_row : NULL;
+        quantize_row_q6_k_hifi_res8_ref(src, (block_q6_k_hifi_res8 *)qrow, n_per_row, row_imatrix);
         src += n_per_row;
         qrow += row_size;
     }
@@ -5759,7 +5759,7 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
 
 // ====================== Q6_K_HIFI_RES8 reference quantization
 
-void quantize_row_q6_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q6_k_hifi_res8 * GGML_RESTRICT y, int64_t k) {
+void quantize_row_q6_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q6_k_hifi_res8 * GGML_RESTRICT y, int64_t k, const float * imatrix) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -5771,11 +5771,60 @@ void quantize_row_q6_k_hifi_res8_ref(const float * GGML_RESTRICT x, block_q6_k_h
         float base_decoded[QK_K];
         dequantize_row_q6_K((const block_q6_K *)&y[i], base_decoded, QK_K);
 
-        // Step 3: Compute per-element errors: err[i] = x[i] - base_decoded[i]
+        // Step 3: Compute per-element errors: err[j] = x[j] - base_decoded[j]
         float err[QK_K];
         for (int j = 0; j < QK_K; ++j) {
             err[j] = x[j] - base_decoded[j];
         }
+
+        // Step 4: Select top-N positions by |err[j]| * importance[j]
+        const int N = Q6_K_HIFI_RES8_MAX_OUTLIERS;
+        float weighted_err[QK_K];
+        if (imatrix) {
+            for (int j = 0; j < QK_K; ++j) {
+                weighted_err[j] = fabsf(err[j]) * imatrix[j];
+            }
+            imatrix += QK_K;
+        } else {
+            for (int j = 0; j < QK_K; ++j) {
+                weighted_err[j] = fabsf(err[j]);
+            }
+        }
+        // Selection sort for top-N indices
+        uint8_t selected_idx[N];
+        bool used[QK_K];
+        memset(used, 0, QK_K);
+        int n_selected = 0;
+        for (int s = 0; s < N; ++s) {
+            float best = 0;
+            int best_pos = -1;
+            for (int j = 0; j < QK_K; ++j) {
+                if (!used[j] && weighted_err[j] > best) {
+                    best = weighted_err[j];
+                    best_pos = j;
+                }
+            }
+            if (best_pos >= 0) {
+                selected_idx[n_selected++] = (uint8_t)best_pos;
+                used[best_pos] = true;
+            }
+        }
+
+        // Step 5: Compute shared scale: residual_scale = max(|err[selected]|) / 127.0f
+        float max_abs_err = 0;
+        for (int s = 0; s < n_selected; ++s) {
+            float ae = fabsf(err[selected_idx[s]]);
+            if (ae > max_abs_err) max_abs_err = ae;
+        }
+        float residual_scale = max_abs_err / 127.0f;
+
+        // Step 6: Quantize residuals: residual_vals[s] = round(err[selected[s]] / residual_scale)
+        for (int s = 0; s < n_selected; ++s) {
+            y[i].outlier_idx[s] = selected_idx[s];
+            y[i].residual_vals[s] = (int8_t)roundf(err[selected_idx[s]] / residual_scale);
+        }
+        y[i].outlier_count = (uint8_t)n_selected;
+        y[i].residual_scale = residual_scale;
 
         x += QK_K;
     }
