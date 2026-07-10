@@ -1304,7 +1304,7 @@ case GGML_TYPE_Q6_K_LITE:
 
 **Not required** for a reference CPU implementation:
 
-- **`repack.cpp`**: No repack handlers are required unless you add runtime repacking.
+- **`repack.cpp`**: Repack handlers are only required if you enable runtime repacking (`--repack`). When repacking is used, each HIFI type must map to its fallback standard type during repack (e.g., Q3_K_HIFI → Q3_K, Q4_K_HIFI → Q4_K) so the repack path can convert model weights at load time. If runtime repacking is disabled or unsupported, no repack handlers are needed — the types pass through unchanged.
 - **`arch/arm/quants.c`** and **`arch/x86/quants.c`**: SIMD-optimized paths are required
   for **Q3_K_HIFI** (see pattern above — delegate to `ggml_vec_dot_q3_K_q8_K` as base).
   **Q4_K_HIFI** can delegate to the fixed generic (which uses the FP16-zero sentinel break).
