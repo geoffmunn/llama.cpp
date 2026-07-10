@@ -410,6 +410,28 @@ static_assert(sizeof(block_q4_k_hifi) == 144 + Q4_K_HIFI_OUTLIERS
               + Q4_K_HIFI_OUTLIERS * sizeof(ggml_half),
               "wrong q4_k_hifi block size/padding");
 
+// Q6_K_HIFI — 222 bytes  (4 outliers; used for critical tensors in Q4_K_HIFI ftype)
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q6_K-compatible region (210 bytes) — DO NOT REORDER
+    uint8_t  ql[QK_K/2];                        // 128 bytes: quants, lower 4 bits
+    uint8_t  qh[QK_K/4];                        //  64 bytes: quants, upper 2 bits
+    int8_t   scales[QK_K/16];                   //  16 bytes: scales, 8-bit
+    ggml_half d;                                //   2 bytes: super-block scale
+    // Outlier extension (12 bytes)
+    uint8_t  outlier_idx[Q6_K_HIFI_OUTLIERS];   // 4 bytes
+    ggml_half outlier_vals[Q6_K_HIFI_OUTLIERS]; // 8 bytes
+} block_q6_k_hifi;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 210 + 12 = 222 bytes
+static_assert(sizeof(block_q6_k_hifi) == sizeof(block_q6_K)
+              + Q6_K_HIFI_OUTLIERS + Q6_K_HIFI_OUTLIERS * sizeof(ggml_half),
+              "wrong q6_k_hifi block size/padding");
+
 // This is only used for intermediate quantization and dot products
 typedef struct {
     float   d;              // delta
