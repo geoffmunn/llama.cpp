@@ -5,17 +5,18 @@
 #define Q4_K_HIFI_OUTLIERS 8
 
 #include "ggml.h"
+#include "hifi-threshold-config.h"
 
 // For Q4_K_HIFI enhancement of critical tensors
 static ggml_type get_hifi_enhanced_type(float model_params_b) {
-    return (model_params_b <= 5.0f) ? GGML_TYPE_Q5_K_HIFI_RES8
-                                    : GGML_TYPE_Q6_K_HIFI_RES8;
+    return (model_params_b <= HIFI_MODEL_MEDIUM_B) ? GGML_TYPE_Q5_K_HIFI_RES8
+                                                   : GGML_TYPE_Q6_K_HIFI_RES8;
 }
 
 // For Q5_K_HIFI enhancement of critical tensors
 static ggml_type get_q5_hifi_enhanced_type(float model_params_b) {
-    if (model_params_b <= 2.0f) return GGML_TYPE_Q6_K;          // no HIFI overhead
-    if (model_params_b <= 5.0f) return GGML_TYPE_Q5_K_HIFI_RES8;
+    if (model_params_b <= HIFI_MODEL_MEDSMALL_B) return GGML_TYPE_Q6_K;          // no HIFI overhead
+    if (model_params_b <= HIFI_MODEL_MEDIUM_B)  return GGML_TYPE_Q5_K_HIFI_RES8;
     return GGML_TYPE_Q6_K_HIFI_RES8;
 }
 
