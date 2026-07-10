@@ -14,8 +14,8 @@ void ggml_vec_dot_q4_k_hifi_q8_K(int n, float * GGML_RESTRICT s,
                                   const void * GGML_RESTRICT vx,
                                   const void * GGML_RESTRICT vy) {
     const int nb = n / QK_K;
-    const block_q4_k_hifi * x = (const block_q4_k_hifi *) vx;
-    const block_q8_K       * y = (const block_q8_K *) vy;
+    const block_q4_k_hifi * x = vx;
+    const block_q8_K       * y = vy;
 
     float total = 0.0f;
     for (int i = 0; i < nb; i++) {
