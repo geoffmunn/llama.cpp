@@ -1,3 +1,4 @@
+#define GGML_COMMON_DECL_CPP
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"
