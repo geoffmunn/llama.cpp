@@ -373,6 +373,9 @@ static_assert(sizeof(block_q6_K) == sizeof(ggml_half) + QK_K / 16 + 3*QK_K/4, "w
 #define Q4_K_HIFI_MAX_OUTLIERS 8
 #endif
 
+// Q6_K_HIFI constants
+#define Q6_K_HIFI_OUTLIERS 4
+
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(push, 1)
 #endif
