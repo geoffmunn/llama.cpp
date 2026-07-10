@@ -1,3 +1,6 @@
+#define GGML_COMMON_DECL_C
+#include "ggml-common.h"
+
 #include "ggml-quants-hifi.h"
 #include <string.h>
 #include <math.h>
