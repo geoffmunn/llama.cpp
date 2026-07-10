@@ -552,6 +552,32 @@ typedef struct {
 
 static_assert(sizeof(block_q3_k_lite) == 104, "wrong q3_k_lite block size/padding");
 
+// Q5_K_LITE: Q4_K base + 8 INT8 residuals = 164 bytes (5.1875 BPW)
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q4_K base (144 bytes): dm[4] + scales[12] + qs[128]
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    uint8_t scales[3*QK_K/64];
+    uint8_t qs[QK_K/2];
+    // INT8 extension (20 bytes)
+    uint8_t   residual_count;
+    uint8_t   residual_idx[Q5_K_LITE_MAX_RESIDUALS];  // 8 bytes
+    int8_t    residual_vals[Q5_K_LITE_MAX_RESIDUALS]; // 8 bytes
+    uint8_t   _pad;
+    ggml_half residual_scale;
+} block_q5_k_lite;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+
+// 144 + 20 = 164 bytes
+static_assert(sizeof(block_q5_k_lite) == 164, "wrong q5_k_lite block size/padding");
+
 // (Almost) "true" 2-bit quantization.
 // Due to the need to use blocks as per ggml design, it ends up using
 // 2.0625 bpw because of the 16-bit scale for each block of 256.
