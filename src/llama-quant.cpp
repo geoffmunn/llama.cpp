@@ -564,7 +564,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_HIFI) {
             const float model_params_b = (float)qs.model.hparams.n_layer() * (float)qs.model.hparams.n_embd * 8.0f / 1e9f;
-            if (model_params_b <= 5.0f) new_type = GGML_TYPE_Q5_K;
+            if (model_params_b <= HIFI_MODEL_MEDIUM_B) new_type = GGML_TYPE_Q5_K;
             else new_type = GGML_TYPE_Q4_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_HIFI) {

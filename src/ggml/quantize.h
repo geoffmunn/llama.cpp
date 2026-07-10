@@ -20,4 +20,12 @@ static ggml_type get_q5_hifi_enhanced_type(float model_params_b) {
     return GGML_TYPE_Q6_K_HIFI_RES8;
 }
 
+// Q4_K_HIFI: fraction of early attn_v layers to enhance
+static float get_hifi_enhancement_threshold(float model_params_b) {
+    if (model_params_b <= HIFI_MODEL_TINY_B)   return HIFI_Q4_ENHANCE_TINY_F;
+    if (model_params_b <= HIFI_MODEL_MEDSMALL_B) return HIFI_Q4_ENHANCE_SMALL_F;
+    if (model_params_b <= HIFI_MODEL_XLARGE_B)  return HIFI_Q4_ENHANCE_MEDIUM_F;
+    return HIFI_Q4_ENHANCE_NONE_F;
+}
+
 #endif // QUANTIZE_H
