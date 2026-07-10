@@ -5590,6 +5590,23 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
     return true;
 }
 
+// ====================== Q3_K_HIFI bulk quantization
+
+size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    if (!imatrix) {
+        quantize_row_q3_k_hifi_ref(src, dst, (int64_t)nrows * n_per_row);
+        return nrows * ggml_row_size(GGML_TYPE_Q3_K_HIFI, n_per_row);
+    }
+    size_t row_size = ggml_row_size(GGML_TYPE_Q3_K_HIFI, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_q3_k_hifi_ref(src, (block_q3_k_hifi *)qrow, n_per_row);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
+}
+
 // ====================== Q3_K_HIFI reference quantization
 
 void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi * GGML_RESTRICT y, int64_t k) {
