@@ -162,6 +162,13 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q5_K_HIFI     = 46, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q2_K_HIFI     = 47, // except 1d tensors
 
+        // LITE ftype
+        LLAMA_FTYPE_MOSTLY_Q2_K_LITE     = 48, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q3_K_LITE     = 49, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q4_K_LITE     = 50, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q5_K_LITE     = 51, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q6_K_LITE     = 52, // except 1d tensors
+
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
 
