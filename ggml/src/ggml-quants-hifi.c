@@ -120,7 +120,7 @@ float ggml_hifi_compute_tensor_importance(const float * imatrix_data, int64_t n_
     for (int64_t i = 0; i < n_elements; i++) {
         double v = fabs((double) imatrix_data[i]);
         sum += v;
-        sum_sq += v * v;
+        sum_sq += (double)v * (double)v;
     }
 
     // Mean absolute importance
