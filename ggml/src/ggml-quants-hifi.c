@@ -240,6 +240,8 @@ float ggml_q3_hifi_get_attn_v_threshold(float model_params_b) {
 }
 
 // --- Q3_K_HIFI model-size classification ---
+// Models ≤2B (heuristic: model_params_b <= 1.7f) have imatrix-guided
+// outlier selection disabled because it degrades quality on small models.
 
 ggml_q3_hifi_size_category ggml_q3_hifi_get_size_category(float model_params_b) {
     if (model_params_b <= 1.7f) {
@@ -267,12 +269,18 @@ int ggml_q3_hifi_get_enhancement_type(float model_params_b, int is_embedding) {
         return Q3_HIFI_ENHANCE_STANDARD;
     }
 
+    // Imatrix-guided Q3_K_HIFI is disabled for models ≤2B because empirical
+    // testing shows it hurts quality on small models. The heuristic threshold
+    // of 1.7f maps approximately to the 2B boundary via the formula:
+    //   model_params_b ≈ n_layer * n_embd * 8 / 1e9
+    if (model_params_b <= 1.7f) {
+        return Q3_HIFI_ENHANCE_NONE;  // disable imatrix-guided Q3_K_HIFI for ≤2B models
+    }
+
     // Larger models benefit from stronger enhancement to preserve precision.
     if (model_params_b > 14.0f) {
         return Q3_HIFI_ENHANCE_STRONG;
-    } else if (model_params_b > 1.7f) {
-        return Q3_HIFI_ENHANCE_STANDARD;
     } else {
-        return Q3_HIFI_ENHANCE_NONE;
+        return Q3_HIFI_ENHANCE_STANDARD;
     }
 }
