@@ -23,7 +23,13 @@ GGML_API float ggml_hifi_compute_block_importance(const float * imatrix_block, i
 GGML_API int   ggml_hifi_compute_block_outlier_count(float block_importance,
                                                       int base_outlier_count, float model_params_b);
 
-// Q3_K_HIFI model-size classification
+// Imatrix guidance threshold configuration
+#define GGML_IMATRIX_THRESHOLD_NUM_RANGES 5
+
+typedef struct {
+    float max_model_size_per_range[GGML_IMATRIX_THRESHOLD_NUM_RANGES - 1]; // {2, 5, 10, 20} in billions
+    float percent_values[GGML_IMATRIX_THRESHOLD_NUM_RANGES];              // {0, 30, 20, 15, 10}
+} ggml_imatrix_threshold_config_t;
 typedef enum {
     Q3_HIFI_SIZE_TINY   = 0,  // ≤1.7B
     Q3_HIFI_SIZE_MEDIUM = 1,  // 2B–8B (sweet spot)
