@@ -45,6 +45,9 @@
 
 #define GGUF_DEFAULT_ALIGNMENT 32
 
+// Q3_K_HIFI outlier count for tiny models (≤1.7B)
+#define TINY_Q3_K_HILOUTLIER_COUNT 2
+
 #ifdef  __cplusplus
 extern "C" {
 #endif
