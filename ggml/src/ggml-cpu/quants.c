@@ -1326,3 +1326,131 @@ HIFI_VEC_DOT_Q8K(ggml_vec_dot_q2_k_hifi_q8_K, block_q2_k_hifi, dequantize_row_q2
 // (LITE dequantize functions not yet implemented; vec_dot entries added later)
 
 #undef HIFI_VEC_DOT_Q8K
+
+// ============================ Missing HIFI/LITE stub implementations ============================
+// These stubs satisfy the linker for type_traits_cpu[] entries.
+// Production implementations should be added per-type.
+
+// ---- quantize_row stubs (all currently unimplemented) ----
+
+void quantize_row_q3_k_hifi(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q3_K_HIFI quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q6_k_hifi(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q6_K_HIFI quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q6_k_hifi_dynamic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q6_K_HIFI_DYNAMIC quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q6_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q6_K_HIFI_RES8 quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q5_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q5_K_HIFI_RES8 quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q3_k_hifi_res8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q3_K_HIFI_RES8 quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q4_k_hifi(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q4_K_HIFI quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q2_k_hifi(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q2_K_HIFI quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q2_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q2_K_LITE quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q3_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q3_K_LITE quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q4_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q4_K_LITE quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q5_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q5_K_LITE quantization
+    (void)x; (void)y; (void)k;
+}
+
+void quantize_row_q6_k_lite(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    // TODO: implement Q6_K_LITE quantization
+    (void)x; (void)y; (void)k;
+}
+
+// ---- vec_dot stubs (all currently unimplemented except q2_k_hifi and q3_k_hifi) ----
+
+void ggml_vec_dot_q6_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q6_k_hifi_dynamic_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q6_k_hifi_res8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q5_k_hifi_res8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q3_k_hifi_res8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q4_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q2_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q3_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q4_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q5_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
+
+void ggml_vec_dot_q6_k_lite_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)n; (void)s; (void)bs; (void)vx; (void)bx; (void)vy; (void)by; (void)nrc;
+    *s = 0.0f;
+}
