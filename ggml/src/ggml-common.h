@@ -357,6 +357,31 @@ typedef struct {
 } block_q6_K;
 static_assert(sizeof(block_q6_K) == sizeof(ggml_half) + QK_K / 16 + 3*QK_K/4, "wrong q6_K block size/padding");
 
+// -----------------------------------------------------------------
+// HIFI quantization types
+// -----------------------------------------------------------------
+
+#define Q3_K_HIFI_BLOCK_SIZE 256
+#define Q3_K_HIFI_OUTLIERS   8
+#define Q3_K_HIFI_INLIERS    248
+#ifndef Q3_K_HIFI_MAX_OUTLIERS
+#define Q3_K_HIFI_MAX_OUTLIERS 8
+#endif
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  q3_k_data[110];                  // standard Q3_K block (outlier positions zeroed)
+    uint8_t  outlier_idx[Q3_K_HIFI_OUTLIERS]; // 8 indices (0–255), sorted ascending
+    ggml_half outliers[Q3_K_HIFI_OUTLIERS];   // 8 FP16 replacement values
+    uint8_t  outlier_count;                   // actual number of outliers stored (0–8)
+    uint8_t  _pad;                            // reserved; keep 136-byte total
+} block_q3_k_hifi;
+#pragma pack(pop)
+// 110 + 8 + 16 + 2 = 136 bytes
+static_assert(sizeof(block_q3_k_hifi) == 110 + Q3_K_HIFI_OUTLIERS
+              + Q3_K_HIFI_OUTLIERS * sizeof(ggml_half) + 2,
+              "wrong q3_k_hifi block size/padding");
+
 // This is only used for intermediate quantization and dot products
 typedef struct {
     float   d;              // delta
