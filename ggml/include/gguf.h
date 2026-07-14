@@ -206,6 +206,14 @@ extern "C" {
     GGML_API void   gguf_get_meta_data(const struct gguf_context * ctx, void * data);
 
     // -----------------------------------------------------------------------
+    // HiFi importance computation
+    // -----------------------------------------------------------------------
+
+    /// Compute tensor-level importance from raw importance matrix data.
+    /// Returns a value in [0.0, 1.0].
+    GGML_API float ggml_hifi_compute_tensor_importance(const float * imatrix_data, int64_t n_elements);
+
+    // -----------------------------------------------------------------------
     // LITE family quantization blocks
     // -----------------------------------------------------------------------
 

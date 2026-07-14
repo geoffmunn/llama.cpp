@@ -1,3 +1,7 @@
+#include "ggml/include/gguf.h"
+#include <math.h>
+#include <float.h>
+
 #define Q3_K_LITE_BLOCK_SIZE    256
 #define Q3_K_LITE_MAX_RESIDUALS 8
 
@@ -34,3 +38,24 @@ typedef struct {
 } block_q4_k_lite;
 // 110 + 18 = 128 bytes
 static_assert(sizeof(block_q4_k_lite) == 128, "wrong q4_k_lite block size/padding");
+
+// -----------------------------------------------------------------------
+// HiFi importance computation
+// -----------------------------------------------------------------------
+
+float ggml_hifi_compute_tensor_importance(const float * imatrix_data, int64_t n_elements) {
+    if (imatrix_data == NULL || n_elements <= 0) {
+        return 0.0f;
+    }
+
+    float sum = 0.0f;
+    for (int64_t i = 0; i < n_elements; i++) {
+        sum += fabsf(imatrix_data[i]);
+    }
+
+    float mean = sum / (float) n_elements;
+
+    // Normalize to [0.0, 1.0] using a sigmoid-like scaling
+    // Typical imatrix values are small; scale so that mean~1 maps to ~0.5
+    return 1.0f / (1.0f + expf(-mean));
+}
