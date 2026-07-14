@@ -568,8 +568,7 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
 template<typename dst_t>
 static void dequantize_row_q3_k_hifi_cuda(const void * vx, dst_t * y,
                                            const int64_t k, cudaStream_t stream) {
-    const int nb = k / QK_K;
-    dequantize_block_q3_k_hifi<<<nb, 64, 0, stream>>>(vx, y);
+    dequantize_block_q3_k_hifi<<<k / QK_K, 64, 0, stream>>>(vx, y);
 }
 
 // ------------------------------------------------------------------
