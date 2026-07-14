@@ -965,6 +965,70 @@ void dequantize_iq4_xs(device const block_iq4_xs * xb, short il, thread type4x4 
     }
 }
 
+// ---------------------------------------------------------------------
+// HIFI dequantization kernels
+// ---------------------------------------------------------------------
+// Strategy: dequantize the base block normally, then patch outlier
+// positions with their stored FP16 replacement values.
+
+#define Q3_K_HIFI_BLOCK_SIZE_METAL  256
+#define Q3_K_HIFI_OUTLIERS_METAL    8
+#define Q2_K_HIFI_BLOCK_SIZE_METAL  256
+#define Q2_K_HIFI_MAX_OUTLIERS_M    3
+#define Q4_K_HIFI_BLOCK_SIZE_METAL  256
+#define Q4_K_HIFI_OUTLIERS_METAL    8
+
+// --- q2_k_hifi --------------------------------------------------------
+template <typename type4x4>
+void dequantize_q2_k_hifi(device const block_q2_k_hifi * xb, short il, thread type4x4 & reg) {
+    // Dequantize base Q2_K first (the first 84 bytes are layout-compatible)
+    dequantize_q2_K((device const block_q2_K *)xb, il, reg);
+
+    // Patch outlier positions with stored FP16 values
+    const int count = xb->outlier_count;
+    const int base = (int)il * 16;  // global offset of this 16-element tile
+    for (int o = 0; o < count; ++o) {
+        const int idx = (int)xb->outlier_idx[o];
+        if (idx >= base && idx < base + 16) {
+            reg[(idx - base)/4][(idx - base)%4] = (float)xb->outlier_vals[o];
+        }
+    }
+}
+
+// --- q3_k_hifi --------------------------------------------------------
+template <typename type4x4>
+void dequantize_q3_k_hifi(device const block_q3_k_hifi * xb, short il, thread type4x4 & reg) {
+    // Dequantize base Q3_K first (first 110 bytes are layout-compatible)
+    dequantize_q3_K((device const block_q3_K *)xb->q3_k_data, il, reg);
+
+    // Patch outlier positions with stored FP16 values
+    const int count = xb->outlier_count;
+    const int base = (int)il * 16;
+    for (int o = 0; o < count; ++o) {
+        const int idx = (int)xb->outlier_idx[o];
+        if (idx >= base && idx < base + 16) {
+            reg[(idx - base)/4][(idx - base)%4] = (float)xb->outliers[o];
+        }
+    }
+}
+
+// --- q4_k_hifi --------------------------------------------------------
+template <typename type4x4>
+void dequantize_q4_k_hifi(device const block_q4_k_hifi * xb, short il, thread type4x4 & reg) {
+    // Dequantize base Q4_K first (first 144 bytes are layout-compatible)
+    dequantize_q4_K((device const block_q4_K *)xb->q4_k_data, il, reg);
+
+    // Patch outlier positions with stored FP16 values
+    const int count = Q4_K_HIFI_OUTLIERS_METAL;  // always 8 for q4_k_hifi
+    const int base = (int)il * 16;
+    for (int o = 0; o < count; ++o) {
+        const int idx = (int)xb->outlier_idx[o];
+        if (idx >= base && idx < base + 16) {
+            reg[(idx - base)/4][(idx - base)%4] = (float)xb->outliers[o];
+        }
+    }
+}
+
 enum ggml_sort_order {
     GGML_SORT_ORDER_ASC,
     GGML_SORT_ORDER_DESC,
