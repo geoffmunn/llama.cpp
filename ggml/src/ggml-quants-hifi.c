@@ -217,7 +217,7 @@ void ggml_q6_k_hifi_res8_select_top_n(const float * GGML_RESTRICT err,
 
     for (int64_t j = 0; j < k; ++j) {
         candidates[j].idx = (int)j;
-        candidates[j].score = fabsf(err[j]) * imatrix_importance[j];
+        candidates[j].score = fabs((double)err[j]) * imatrix_importance[j];
     }
 
     /* Partial sort: bubble the top max_outliers to the front */
@@ -237,7 +237,7 @@ void ggml_q6_k_hifi_res8_select_top_n(const float * GGML_RESTRICT err,
     /* Collect results — skip zero-score entries */
     int count = 0;
     for (int o = 0; o < max_outliers; ++o) {
-        if (candidates[o].score > 0.0f) {
+        if (fabs((double)candidates[o].score) > 0.0) {
             outlier_idx[count++] = (uint8_t)candidates[o].idx;
         }
     }
@@ -265,8 +265,8 @@ void ggml_q6_k_hifi_res8_compute_shared_scale(const float * GGML_RESTRICT err,
 
     float max_abs_err = 0.0f;
     for (int i = 0; i < actual_count; ++i) {
-        float abs_err = fabsf(err[outlier_idx[i]]);
-        if (abs_err > max_abs_err) {
+        float abs_err = fabs((double)err[outlier_idx[i]]);
+        if (fabs((double)abs_err) > max_abs_err) {
             max_abs_err = abs_err;
         }
     }
