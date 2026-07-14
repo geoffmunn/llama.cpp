@@ -1740,6 +1740,39 @@ size_t quantize_q5klite(const float * GGML_RESTRICT src, void * GGML_RESTRICT ds
     return nrow * row_size;
 }
 
+size_t quantize_q6klite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * GGML_RESTRICT quant_weights) {
+    // Q6K Lite uses a Q5_K-like base layout with INT8 residual extension
+    size_t row_size = n_per_row / 256 * sizeof(block_q6_k_lite);
+    if (!quant_weights) {
+        // Zero-extend the extra INT8 fields per block
+        block_q6_k_lite * dst_block = (block_q6_k_lite *)dst;
+        int64_t total_blocks = nrow * n_per_row / 256;
+        for (int64_t i = 0; i < total_blocks; i++) {
+            dst_block[i].residual_count = 0;
+            memset(dst_block[i].outlier_idx, 0, sizeof(dst_block[i].outlier_idx));
+            memset(dst_block[i].residual_vals, 0, sizeof(dst_block[i].residual_vals));
+            memset(dst_block[i].idx, 0, sizeof(dst_block[i].idx));
+            dst_block[i]._pad = 0;
+            dst_block[i].residual_scale = 0;
+        }
+        quantize_row_q5_K_ref(src, (block_q5_K *)dst, nrow * n_per_row);
+    } else {
+        // TODO: imatrix-guided quantization
+        block_q6_k_lite * dst_block = (block_q6_k_lite *)dst;
+        int64_t total_blocks = nrow * n_per_row / 256;
+        for (int64_t i = 0; i < total_blocks; i++) {
+            dst_block[i].residual_count = 0;
+            memset(dst_block[i].outlier_idx, 0, sizeof(dst_block[i].outlier_idx));
+            memset(dst_block[i].residual_vals, 0, sizeof(dst_block[i].residual_vals));
+            memset(dst_block[i].idx, 0, sizeof(dst_block[i].idx));
+            dst_block[i]._pad = 0;
+            dst_block[i].residual_scale = 0;
+        }
+        quantize_row_q5_K_ref(src, (block_q5_K *)dst, nrow * n_per_row);
+    }
+    return nrow * row_size;
+}
+
 // -----------------------------------------------------------------
 // Temp buffer mechanism for weighted copies
 //
