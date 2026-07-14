@@ -1301,11 +1301,12 @@ void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
                                 bx_hifi[i].q3_k_data, sizeof(block_q3_K),
                                 &by_q8[i], sizeof(block_q8_K), 1);
         result += block_dot;
-        // block_q3_k_hifi has no outlier_count. Break on FP16-zero sentinel.
+        // Use outlier_count for safe loop bound (avoids sentinel pitfall with uint8_t indices)
+        const int nc = MIN(bx_hifi[i].outlier_count, Q3_K_HIFI_MAX_OUTLIERS);
         const float q8d = by_q8[i].d;
-        for (int j = 0; j < Q3_K_HIFI_OUTLIERS; j++) {
+        for (int j = 0; j < nc; j++) {
             ggml_half oval = bx_hifi[i].outliers[j];
-            if (oval == 0) break;  // FP16-zero sentinel (ggml_half = uint16_t on CPU)
+            if (oval == 0) break;  // safety guard against zero sentinel in unused slots
             const int pos = (int)bx_hifi[i].outlier_idx[j];
             result += GGML_FP16_TO_FP32(oval)
                     * (q8d * (float)by_q8[i].qs[pos]);
