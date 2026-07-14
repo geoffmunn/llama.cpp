@@ -205,6 +205,46 @@ extern "C" {
     // writes the meta data to pointer "data"
     GGML_API void   gguf_get_meta_data(const struct gguf_context * ctx, void * data);
 
+    // -----------------------------------------------------------------------
+    // LITE family quantization blocks
+    // -----------------------------------------------------------------------
+
+#define Q2_K_LITE_BLOCK_SIZE    256
+#define Q2_K_LITE_MAX_RESIDUALS 4
+
+#ifdef _MSC_VER
+#define GGML_EXTENSION_Q2K_LITE
+#else
+#define GGML_EXTENSION_Q2K_LITE __extension__
+#endif
+
+#pragma pack(push, 1)
+typedef struct {
+    // Q2_K base (84 bytes)
+    uint8_t scales[256 / 16];
+    uint8_t qs[256 / 4];
+    GGML_EXTENSION_Q2K_LITE union {
+        struct { uint16_t d; uint16_t dmin; }
+#ifndef __cplusplus
+        data
+#endif
+        ;
+    };
+    // INT8 extension (12 bytes)
+    uint8_t   residual_count;
+    uint8_t   residual_idx[Q2_K_LITE_MAX_RESIDUALS];  // 4 bytes
+    int8_t    residual_vals[Q2_K_LITE_MAX_RESIDUALS]; // 4 bytes
+    uint8_t   _pad;
+    uint16_t  residual_scale;                          // 2 bytes
+} block_q2_k_lite;
+// 84 + 12 = 96 bytes
+#ifdef __cplusplus
+static_assert(sizeof(block_q2_k_lite) == 96, "wrong q2_k_lite block size/padding");
+#endif
+#pragma pack(pop)
+
+#undef GGML_EXTENSION_Q2K_LITE
+
 #ifdef  __cplusplus
 }
 #endif
