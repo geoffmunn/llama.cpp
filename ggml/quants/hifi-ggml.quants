@@ -9,3 +9,4 @@ typedef struct {
 } ggml_hifi_quant_context;
 
 GGML_API const ggml_hifi_quant_context* ggml_hifi_get_context();
+GGML_API void ggml_hifi_set_context(const ggml_hifi_quant_context* ctx);
