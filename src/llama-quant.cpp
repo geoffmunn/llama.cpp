@@ -425,6 +425,18 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
     return return_type;
 }
 
+// Select the enhanced quantization type for OUTPUT / TOKEN_EMBD tensors
+// based on model size (in billions of parameters).
+static ggml_type get_hifi_enhanced_type(float model_params_b) {
+    if (model_params_b <= 1.75f) {
+        return GGML_TYPE_Q5_K;
+    } else if (model_params_b <= 8.5f) {
+        return GGML_TYPE_Q6_K;
+    } else {
+        return GGML_TYPE_Q8_0;
+    }
+}
+
 // internal standard logic for selecting the target tensor type based on tensor category, ftype, and model arch
 static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, tensor_category category) {
     const std::string name = ggml_get_name(tensor);
