@@ -120,6 +120,12 @@ GGML_API int ggml_q4_hifi_get_max_outliers(float model_params_b);
 GGML_API int ggml_lite_get_residual_budget(float tensor_importance, float model_params_b,
                                             int max_residuals);
 
+// INT8 Residual Correction — Step 3: compute per-element errors
+GGML_API void ggml_q6_k_hifi_res8_compute_errors(const float * GGML_RESTRICT x,
+                                                  const float * GGML_RESTRICT base_decoded,
+                                                  float * GGML_RESTRICT err,
+                                                  int64_t k);
+
 #ifdef __cplusplus
 }
 #endif
