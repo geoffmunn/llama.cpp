@@ -410,6 +410,7 @@ static_assert(sizeof(block_q4_k_hifi) == 144 + Q4_K_HIFI_OUTLIERS
               "wrong q4_k_hifi block size/padding");
 
 #define Q6_K_HIFI_RES8_MAX_OUTLIERS 8
+#define Q6_K_HIFI_RES8_BLOCK_SIZE   232
 
 // This is only used for intermediate quantization and dot products
 typedef struct {
