@@ -7789,6 +7789,7 @@ size_t ggml_quantize_chunk(
                 result = n * elemsize;
                 memcpy((uint8_t *)dst + start * elemsize, src + start, result);
             } break;
+        case GGML_TYPE_Q2_K_HIFI:  result = quantize_q2_k_hifi(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_K_HIFI:  result = quantize_q4_k_hifi(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         default:
             assert(false);

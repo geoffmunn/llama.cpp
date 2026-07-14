@@ -1670,6 +1670,17 @@ size_t quantize_q4_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrow * row_size;
 }
 
+size_t quantize_q2_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * GGML_RESTRICT quant_weights) {
+    size_t row_size = n_per_row / Q2_K_HIFI_BLOCK_SIZE * sizeof(block_q2_k_hifi);
+    if (!quant_weights) {
+        quantize_row_q2_k_hifi_ref(src, (block_q2_k_hifi *)dst, nrow * n_per_row);
+    } else {
+        // TODO: imatrix-guided quantization
+        quantize_row_q2_k_hifi_ref(src, (block_q2_k_hifi *)dst, nrow * n_per_row);
+    }
+    return nrow * row_size;
+}
+
 // -----------------------------------------------------------------
 // Temp buffer mechanism for weighted copies
 //
