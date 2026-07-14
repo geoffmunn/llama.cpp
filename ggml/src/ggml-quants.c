@@ -1654,6 +1654,7 @@ void dequantize_row_q4_k_hifi(const block_q4_k_hifi * GGML_RESTRICT x, float * G
 
         // Replace outlier positions with FP16 values
         for (int o = 0; o < Q4_K_HIFI_OUTLIERS; ++o) {
+            if (x[i].outliers[o] == 0) break;
             y[i * Q4_K_HIFI_BLOCK_SIZE + x[i].outlier_idx[o]] = GGML_FP16_TO_FP32(x[i].outliers[o]);
         }
     }
