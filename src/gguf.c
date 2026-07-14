@@ -1,1 +1,2 @@
 #define Q3_K_LITE_BLOCK_SIZE    256
+#define Q3_K_LITE_MAX_RESIDUALS 8
