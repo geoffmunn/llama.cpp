@@ -6,6 +6,8 @@
 
 #include "gguf.h"
 
+#include "hf.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <clocale>
@@ -86,6 +88,19 @@ static bool striequals(const char * a, const char * b) {
         a++; b++;
     }
     return *a == *b;
+}
+
+// Compute block-level importance from a slice of an importance matrix.
+// Returns the mean absolute value across the block elements.
+float ggml_hifi_compute_block_importance(const float * imatrix_block, int block_size) {
+    if (imatrix_block == nullptr || block_size <= 0) {
+        return 0.0f;
+    }
+    float sum = 0.0f;
+    for (int i = 0; i < block_size; i++) {
+        sum += std::abs(imatrix_block[i]);
+    }
+    return sum / block_size;
 }
 
 static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftype, std::string & ftype_str_out) {
