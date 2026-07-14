@@ -7,3 +7,5 @@ typedef struct {
     int   is_active;         // 1 = adaptive mode on
     float model_params_b;    // model size in billions
 } ggml_hifi_quant_context;
+
+GGML_API const ggml_hifi_quant_context* ggml_hifi_get_context();
