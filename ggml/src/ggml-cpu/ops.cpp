@@ -4943,6 +4943,7 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q2_K_LITE:
         case GGML_TYPE_Q3_K_LITE:
         case GGML_TYPE_Q4_K_LITE:
+        case GGML_TYPE_Q5_K_LITE:
             {
                 ggml_compute_forward_get_rows_q(params, dst);
             } break;
