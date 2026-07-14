@@ -1682,6 +1682,39 @@ size_t quantize_q2_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrow * row_size;
 }
 
+// ====================== Q2K Lite quantization
+
+size_t quantize_q2_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * GGML_RESTRICT quant_weights) {
+    // Q2K Lite uses a Q2_K base layout with INT8 residual extension
+    size_t row_size = n_per_row / Q2_K_LITE_BLOCK_SIZE * sizeof(block_q2_k_lite);
+    if (!quant_weights) {
+        // Zero-extend the extra INT8 fields per block
+        block_q2_k_lite * dst_block = (block_q2_k_lite *)dst;
+        int64_t total_blocks = nrow * n_per_row / Q2_K_LITE_BLOCK_SIZE;
+        for (int64_t i = 0; i < total_blocks; i++) {
+            dst_block[i].residual_count = 0;
+            memset(dst_block[i].outlier_idx, 0, sizeof(dst_block[i].outlier_idx));
+            memset(dst_block[i].residual_vals, 0, sizeof(dst_block[i].residual_vals));
+            dst_block[i]._pad = 0;
+            dst_block[i].residual_scale = 0;
+        }
+        quantize_row_q2_K_ref(src, (block_q2_K *)dst, nrow * n_per_row);
+    } else {
+        // TODO: imatrix-guided quantization
+        block_q2_k_lite * dst_block = (block_q2_k_lite *)dst;
+        int64_t total_blocks = nrow * n_per_row / Q2_K_LITE_BLOCK_SIZE;
+        for (int64_t i = 0; i < total_blocks; i++) {
+            dst_block[i].residual_count = 0;
+            memset(dst_block[i].outlier_idx, 0, sizeof(dst_block[i].outlier_idx));
+            memset(dst_block[i].residual_vals, 0, sizeof(dst_block[i].residual_vals));
+            dst_block[i]._pad = 0;
+            dst_block[i].residual_scale = 0;
+        }
+        quantize_row_q2_K_ref(src, (block_q2_K *)dst, nrow * n_per_row);
+    }
+    return nrow * row_size;
+}
+
 // ====================== Q3K Lite quantization
 
 size_t quantize_q3klite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * GGML_RESTRICT quant_weights) {

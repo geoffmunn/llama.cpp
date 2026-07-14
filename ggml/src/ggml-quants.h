@@ -115,6 +115,9 @@ GGML_API void dequantize_row_q4_k_hifi(const block_q4_k_hifi * x, float * y, int
 GGML_API size_t quantize_q4_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
                                     int64_t nrows, int64_t n_per_row, const float * imatrix);
 
+GGML_API size_t quantize_q2_k_lite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                                    int64_t nrows, int64_t n_per_row, const float * imatrix);
+
 GGML_API size_t quantize_q3klite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
                                     int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_q4klite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
