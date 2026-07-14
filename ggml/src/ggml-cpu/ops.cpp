@@ -4924,6 +4924,7 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
         case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q2_K_HIFI:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
