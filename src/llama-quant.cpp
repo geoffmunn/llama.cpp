@@ -1173,6 +1173,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const ggml_type cur_type = tensor->type;
         const ggml_type new_type = tm.target_type;
 
+        struct ggml_hifi_quant_context { };
+        ggml_hifi_quant_context hifi_ctx = {};
+        const ggml_hifi_quant_context * hifi_ctx_ptr = nullptr;
+
         // If we've decided to quantize to the same type the tensor is already
         // in then there's nothing to do.
         bool quantize = cur_type != new_type;
