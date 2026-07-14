@@ -98,6 +98,28 @@ GGML_API int ggml_q3_hifi_should_enhance_tensor(const char * tensor_name,
                                                 float model_params_b,
                                                 int * enhanced_count, int max_enhanced);
 
+/// Enhancement type selection based on model size
+GGML_API int   ggml_q3_hifi_get_enhancement_type(float model_params_b, int is_embedding);
+
+/// Attention V threshold for the given model size
+GGML_API float ggml_q3_hifi_get_attn_v_threshold(float model_params_b);
+
+// TLS per-tensor outlier control (reused by Q4_K_HIFI)
+GGML_API void  ggml_q3_hifi_set_tensor_outliers(int outliers);
+GGML_API int   ggml_q3_hifi_get_tensor_outliers(void);
+GGML_API void  ggml_q3_hifi_set_tensor_importance(float importance);
+GGML_API float ggml_q3_hifi_get_tensor_importance(void);
+GGML_API void  ggml_q3_hifi_reset_tensor_state(void);
+GGML_API int   ggml_q3_hifi_compute_block_outliers(float block_outlier_ratio,
+                                                    int base_outlier_count, float model_params_b);
+
+// Q4_K_HIFI
+GGML_API int ggml_q4_hifi_get_max_outliers(float model_params_b);
+
+// K_LITE tier-based residual budget
+GGML_API int ggml_lite_get_residual_budget(float tensor_importance, float model_params_b,
+                                            int max_residuals);
+
 #ifdef __cplusplus
 }
 #endif
