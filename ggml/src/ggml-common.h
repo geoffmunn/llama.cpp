@@ -537,7 +537,7 @@ typedef struct {
         ggml_half2 dm;
     } GGML_COMMON_AGGR_U;
     uint8_t scales[3*QK_K/64];
-    uint8_t qs[QK_K/2];
+    uint8_t qs[QK_K/2];           // raw quantization indices
     // INT8 extension (20 bytes)
     uint8_t   residual_count;
     uint8_t   residual_idx[Q5_K_LITE_MAX_RESIDUALS];  // 8 bytes
@@ -562,7 +562,7 @@ typedef struct {
     } GGML_COMMON_AGGR_U;
     uint8_t scales[3 * QK_K / 64];
     uint8_t qh[QK_K/8];
-    uint8_t qs[QK_K/2];
+    uint8_t qs[QK_K/2];           // raw quantization indices
     // INT8 extension (20 bytes)
     uint8_t   residual_count;
     uint8_t   residual_idx[Q6_K_LITE_MAX_RESIDUALS];  // 8 bytes
