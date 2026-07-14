@@ -525,6 +525,7 @@ static_assert(sizeof(block_q5_k_hifi_res8) == 196,
               "wrong q5_k_hifi_res8 block size/padding");
 
 #define Q5_K_LITE_BLOCK_SIZE    256
+#define Q5_K_LITE_MAX_RESIDUALS 8
 
 // This is only used for intermediate quantization and dot products
 typedef struct {
