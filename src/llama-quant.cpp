@@ -13,6 +13,9 @@
 #include <thread>
 #include <unordered_map>
 
+#define GGML_COMMON_DECL_CPP
+#include "../ggml/src/ggml-common.h"
+
 // result of parsing --tensor-type option
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
 struct tensor_type_option {
