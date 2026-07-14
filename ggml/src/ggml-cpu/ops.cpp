@@ -4940,6 +4940,7 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_Q2_K_LITE:
             {
                 ggml_compute_forward_get_rows_q(params, dst);
             } break;
@@ -5651,10 +5652,23 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
         case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q2_K_HIFI:
+        case GGML_TYPE_Q2_K_LITE:
         case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q3_K_LITE:
+        case GGML_TYPE_Q3_K_HIFI:
+        case GGML_TYPE_Q3_K_HIFI_RES8:
         case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q4_K_HIFI:
+        case GGML_TYPE_Q4_K_LITE:
         case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q5_K_LITE:
+        case GGML_TYPE_Q5_K_HIFI_RES8:
         case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q6_K_LITE:
+        case GGML_TYPE_Q6_K_HIFI:
+        case GGML_TYPE_Q6_K_HIFI_DYNAMIC:
+        case GGML_TYPE_Q6_K_HIFI_RES8:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_IQ2_XXS:
