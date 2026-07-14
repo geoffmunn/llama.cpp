@@ -220,6 +220,8 @@ extern "C" {
 #define Q2_K_LITE_BLOCK_SIZE    256
 #define Q2_K_LITE_MAX_RESIDUALS 4
 
+#define TINY_Q3K_HI_MAX_OUTLIERS 2
+
 #ifdef _MSC_VER
 #define GGML_EXTENSION_Q2K_LITE
 #else
