@@ -15,3 +15,22 @@ typedef struct {
 } block_q3_k_lite;
 // 84 + 20 = 104 bytes
 static_assert(sizeof(block_q3_k_lite) == 104, "wrong q3_k_lite block size/padding");
+
+#define Q4_K_LITE_BLOCK_SIZE    256
+#define Q4_K_LITE_MAX_RESIDUALS 7
+
+typedef struct {
+    // Q3_K base (110 bytes): hmask[32] + qs[64] + scales[12] + d[2]
+    uint8_t   hmask[QK_K/8];
+    uint8_t   qs[QK_K/4];
+    uint8_t   scales[K_SCALE_SIZE];
+    ggml_half d;
+    // INT8 extension (18 bytes)
+    uint8_t   residual_count;
+    uint8_t   residual_idx[Q4_K_LITE_MAX_RESIDUALS];  // 7 bytes
+    int8_t    residual_vals[Q4_K_LITE_MAX_RESIDUALS]; // 7 bytes
+    uint8_t   _pad;
+    ggml_half residual_scale;                          // 2 bytes
+} block_q4_k_lite;
+// 110 + 18 = 128 bytes
+static_assert(sizeof(block_q4_k_lite) == 128, "wrong q4_k_lite block size/padding");
