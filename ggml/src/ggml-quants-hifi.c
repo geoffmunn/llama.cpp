@@ -242,3 +242,31 @@ void ggml_q6_k_hifi_res8_compute_shared_scale(const float * GGML_RESTRICT err,
     }
     *residual_scale = max_abs_err / 127.0f;
 }
+
+/* ----------------------------------------------------------------- */
+/*  INT8 Residual Correction — Step 6: quantize selected residuals   */
+/* -----------------------------------------------------------------
+ *
+ *  Quantize each selected residual to an INT8 value:
+ *
+ *      residual_vals[i] = round(err[selected[i]] / residual_scale)
+ *
+ *  The result is clamped to [-127, 127] to fit in INT8.
+ * ----------------------------------------------------------------- */
+
+void ggml_q6_k_hifi_res8_quantize_residuals(const float * GGML_RESTRICT err,
+                                             const uint8_t * GGML_RESTRICT outlier_idx,
+                                             int actual_count,
+                                             float residual_scale,
+                                             int8_t * GGML_RESTRICT residual_vals) {
+    assert(actual_count > 0);
+    assert(residual_scale > 0.0f);
+    assert(residual_vals != NULL);
+
+    for (int i = 0; i < actual_count; ++i) {
+        float val = roundf(err[outlier_idx[i]] / residual_scale);
+        if (val > 127.0f) val = 127.0f;
+        if (val < -127.0f) val = -127.0f;
+        residual_vals[i] = (int8_t)val;
+    }
+}

@@ -140,6 +140,12 @@ GGML_API void ggml_q6_k_hifi_res8_compute_shared_scale(const float * GGML_RESTRI
                                                        int actual_count,
                                                        float * GGML_RESTRICT residual_scale);
 
+GGML_API void ggml_q6_k_hifi_res8_quantize_residuals(const float * GGML_RESTRICT err,
+                                                     const uint8_t * GGML_RESTRICT outlier_idx,
+                                                     int actual_count,
+                                                     float residual_scale,
+                                                     int8_t * GGML_RESTRICT residual_vals);
+
 #ifdef __cplusplus
 }
 #endif
