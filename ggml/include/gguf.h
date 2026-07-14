@@ -240,7 +240,7 @@ typedef struct {
     };
     // INT8 extension (12 bytes)
     uint8_t   residual_count;
-    uint8_t   residual_idx[Q2_K_LITE_MAX_RESIDUALS];  // 4 bytes
+    uint8_t   outlier_idx[Q2_K_LITE_MAX_RESIDUALS];  // 4 bytes
     int8_t    residual_vals[Q2_K_LITE_MAX_RESIDUALS]; // 4 bytes
     uint8_t   _pad;
     uint16_t  residual_scale;                          // 2 bytes

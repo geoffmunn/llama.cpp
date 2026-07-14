@@ -12,7 +12,7 @@ typedef struct {
     GGML_EXTENSION union { ... } GGML_COMMON_AGGR_U;
     // INT8 extension (20 bytes)
     uint8_t   residual_count;
-    uint8_t   residual_idx[Q3_K_LITE_MAX_RESIDUALS];  // 8 bytes
+    uint8_t   outlier_idx[Q3_K_LITE_MAX_RESIDUALS];  // 8 bytes
     int8_t    residual_vals[Q3_K_LITE_MAX_RESIDUALS]; // 8 bytes
     uint8_t   _pad;
     ggml_half residual_scale;                          // 2 bytes
@@ -31,7 +31,7 @@ typedef struct {
     ggml_half d;
     // INT8 extension (18 bytes)
     uint8_t   residual_count;
-    uint8_t   residual_idx[Q4_K_LITE_MAX_RESIDUALS];  // 7 bytes
+    uint8_t   outlier_idx[Q4_K_LITE_MAX_RESIDUALS];  // 7 bytes
     int8_t    residual_vals[Q4_K_LITE_MAX_RESIDUALS]; // 7 bytes
     uint8_t   _pad;
     ggml_half residual_scale;                          // 2 bytes

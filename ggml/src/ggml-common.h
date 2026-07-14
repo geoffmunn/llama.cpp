@@ -540,7 +540,7 @@ typedef struct {
     uint8_t qs[QK_K/2];           // raw quantization indices
     // INT8 extension (28 bytes)
     uint8_t   residual_count;
-    uint8_t   residual_idx[Q5_K_LITE_MAX_RESIDUALS];  // 8 bytes
+    uint8_t   outlier_idx[Q5_K_LITE_MAX_RESIDUALS];  // 8 bytes
     int8_t    residual_vals[Q5_K_LITE_MAX_RESIDUALS]; // 8 bytes
     int8_t    idx[Q5_K_LITE_MAX_RESIDUALS];           // 8 bytes: sparse reconstruction pointers/offsets
     uint8_t   _pad;
@@ -566,7 +566,7 @@ typedef struct {
     uint8_t qs[QK_K/2];           // raw quantization indices
     // INT8 extension (28 bytes)
     uint8_t   residual_count;
-    uint8_t   residual_idx[Q6_K_LITE_MAX_RESIDUALS];  // 8 bytes
+    uint8_t   outlier_idx[Q6_K_LITE_MAX_RESIDUALS];  // 8 bytes
     int8_t    residual_vals[Q6_K_LITE_MAX_RESIDUALS]; // 8 bytes
     int8_t    idx[Q6_K_LITE_MAX_RESIDUALS];           // 8 bytes: sparse reconstruction pointers/offsets
     uint8_t   _pad;
