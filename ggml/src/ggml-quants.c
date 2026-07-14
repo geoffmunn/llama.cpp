@@ -1681,6 +1681,20 @@ size_t quantize_q2_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrow * row_size;
 }
 
+// ====================== Q3K Lite quantization
+
+size_t quantize_q3klite(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * GGML_RESTRICT quant_weights) {
+    // Q3K Lite uses the same block layout as Q3_K for the base quantization
+    size_t row_size = n_per_row / 256 * sizeof(block_q3_K);
+    if (!quant_weights) {
+        quantize_row_q3_K_ref(src, (block_q3_K *)dst, nrow * n_per_row);
+    } else {
+        // TODO: imatrix-guided quantization
+        quantize_row_q3_K_ref(src, (block_q3_K *)dst, nrow * n_per_row);
+    }
+    return nrow * row_size;
+}
+
 // -----------------------------------------------------------------
 // Temp buffer mechanism for weighted copies
 //
