@@ -415,6 +415,55 @@ static_assert(sizeof(block_q4_k_hifi) == 144 + Q4_K_HIFI_OUTLIERS
 #define Q5_K_HIFI_RES8_MAX_OUTLIERS 8
 #define Q5_K_HIFI_RES8_BLOCK_SIZE   196
 
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q6_K-compatible region (210 bytes)
+    uint8_t  ql[QK_K/2];
+    uint8_t  qh[QK_K/4];
+    int8_t   scales[QK_K/16];
+    ggml_half d;
+    // INT8 residual extension (22 bytes)
+    uint8_t outlier_count;                              // 1: actual count (1–8)
+    uint8_t outlier_idx[Q6_K_HIFI_RES8_MAX_OUTLIERS];  // 8: positions (0–255)
+    int8_t  residual_vals[Q6_K_HIFI_RES8_MAX_OUTLIERS];// 8: INT8 corrections
+    uint8_t _padding;                                   // 1: float alignment
+    float   residual_scale;                             // 4: shared scale
+} block_q6_k_hifi_res8;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 210 + 22 = 232 bytes
+static_assert(sizeof(block_q6_k_hifi_res8) == 232,
+              "wrong q6_k_hifi_res8 block size/padding");
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q5_K-compatible region (176 bytes)
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    uint8_t scales[K_SCALE_SIZE]; // 12 bytes
+    uint8_t qh[QK_K/8];           // 32 bytes: high bit
+    uint8_t qs[QK_K/2];           // 128 bytes: low 4 bits
+    // Compact INT8 residual extension (20 bytes)
+    uint8_t outlier_count;                               // 1: actual count (0–8; 0 = no enhancement)
+    uint8_t outlier_idx[Q5_K_HIFI_RES8_MAX_OUTLIERS];    // 8: positions
+    int8_t  residual_vals[Q5_K_HIFI_RES8_MAX_OUTLIERS];  // 8: INT8 corrections
+    uint8_t residual_scale_e4m3;                         // 1: E4M3 FP8 scale
+    uint8_t _reserved[2];                                // 2: explicit padding so pack(1) still = 196
+} block_q5_k_hifi_res8;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 176 + 20 = 196 bytes (1+8+8+1+2 = 20 in extension)
+static_assert(sizeof(block_q5_k_hifi_res8) == 196,
+              "wrong q5_k_hifi_res8 block size/padding");
+
 // This is only used for intermediate quantization and dot products
 typedef struct {
     float   d;              // delta
