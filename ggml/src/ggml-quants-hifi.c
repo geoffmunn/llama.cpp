@@ -213,3 +213,32 @@ void ggml_q6_k_hifi_res8_select_top_n(const float * GGML_RESTRICT err,
     }
     *actual_count = count;
 }
+
+/* ----------------------------------------------------------------- */
+/*  INT8 Residual Correction — Step 5: compute shared scale           */
+/* -----------------------------------------------------------------
+ *
+ *  Compute the shared scale from the selected residuals:
+ *
+ *      residual_scale = max(|err[selected[i]]|) / 127.0f
+ *
+ *  This scale is used uniformly when quantizing all selected residuals
+ *  to INT8 values.
+ * ----------------------------------------------------------------- */
+
+void ggml_q6_k_hifi_res8_compute_shared_scale(const float * GGML_RESTRICT err,
+                                               const uint8_t * GGML_RESTRICT outlier_idx,
+                                               int actual_count,
+                                               float * GGML_RESTRICT residual_scale) {
+    assert(actual_count > 0);
+    assert(residual_scale != NULL);
+
+    float max_abs_err = 0.0f;
+    for (int i = 0; i < actual_count; ++i) {
+        float abs_err = fabsf(err[outlier_idx[i]]);
+        if (abs_err > max_abs_err) {
+            max_abs_err = abs_err;
+        }
+    }
+    *residual_scale = max_abs_err / 127.0f;
+}

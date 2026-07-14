@@ -134,6 +134,12 @@ GGML_API void ggml_q6_k_hifi_res8_select_top_n(const float * GGML_RESTRICT err,
                                                 uint8_t * GGML_RESTRICT outlier_idx,
                                                 int * GGML_RESTRICT actual_count);
 
+// INT8 Residual Correction — Step 5: compute shared scale from selected residuals
+GGML_API void ggml_q6_k_hifi_res8_compute_shared_scale(const float * GGML_RESTRICT err,
+                                                       const uint8_t * GGML_RESTRICT outlier_idx,
+                                                       int actual_count,
+                                                       float * GGML_RESTRICT residual_scale);
+
 #ifdef __cplusplus
 }
 #endif
