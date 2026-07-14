@@ -415,6 +415,10 @@ static_assert(sizeof(block_q3_k_hifi_res8)
               + Q3_K_HIFI_RES8_OUTLIERS + Q3_K_HIFI_RES8_OUTLIERS + sizeof(float),
               "wrong q3_k_hifi_res8 block size/padding");
 
+#define Q2_K_HIFI_BLOCK_SIZE         256
+#define Q2_K_HIFI_MAX_OUTLIERS       3
+#define Q2_K_HIFI_RESIDUAL_MODE_FLAG 0x80
+
 #define Q4_K_HIFI_BLOCK_SIZE 256
 #define Q4_K_HIFI_OUTLIERS   8
 #define Q4_K_HIFI_INLIERS    248
