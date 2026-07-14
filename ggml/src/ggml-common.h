@@ -382,6 +382,29 @@ static_assert(sizeof(block_q3_k_hifi) == 110 + Q3_K_HIFI_OUTLIERS
               + Q3_K_HIFI_OUTLIERS * sizeof(ggml_half) + 2,
               "wrong q3_k_hifi block size/padding");
 
+#define Q4_K_HIFI_BLOCK_SIZE 256
+#define Q4_K_HIFI_OUTLIERS   8
+#define Q4_K_HIFI_INLIERS    248
+#ifndef Q4_K_HIFI_MAX_OUTLIERS
+#define Q4_K_HIFI_MAX_OUTLIERS 8
+#endif
+
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    uint8_t  q4_k_data[144];                  // standard Q4_K block (outlier positions zeroed)
+    uint8_t  outlier_idx[Q4_K_HIFI_OUTLIERS]; // 8 indices (0–255), sorted ascending
+    ggml_half outliers[Q4_K_HIFI_OUTLIERS];   // 8 FP16 replacement values
+} block_q4_k_hifi;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 144 + 8 + 16 = 168 bytes → 5.25 BPW
+static_assert(sizeof(block_q4_k_hifi) == 144 + Q4_K_HIFI_OUTLIERS
+              + Q4_K_HIFI_OUTLIERS * sizeof(ggml_half),
+              "wrong q4_k_hifi block size/padding");
+
 // This is only used for intermediate quantization and dot products
 typedef struct {
     float   d;              // delta
