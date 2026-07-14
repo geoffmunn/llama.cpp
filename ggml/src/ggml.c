@@ -943,6 +943,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .type_size                = 0,
         .is_quantized             = false,
     },
+    [GGML_TYPE_Q6_K_LITE] = {
+        .type_name                = "q6_K_lite",
+        .blck_size                = Q6_K_LITE_BLOCK_SIZE,
+        .type_size                = sizeof(block_q6_k_lite),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q5_K,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q5_K_ref,
+    },
 };
 
 const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
