@@ -538,15 +538,16 @@ typedef struct {
     } GGML_COMMON_AGGR_U;
     uint8_t scales[3*QK_K/64];
     uint8_t qs[QK_K/2];           // raw quantization indices
-    // INT8 extension (20 bytes)
+    // INT8 extension (28 bytes)
     uint8_t   residual_count;
     uint8_t   residual_idx[Q5_K_LITE_MAX_RESIDUALS];  // 8 bytes
     int8_t    residual_vals[Q5_K_LITE_MAX_RESIDUALS]; // 8 bytes
+    int8_t    idx[Q5_K_LITE_MAX_RESIDUALS];           // 8 bytes: sparse reconstruction pointers/offsets
     uint8_t   _pad;
     ggml_half residual_scale;
 } block_q5_k_lite;
-// 144 + 20 = 164 bytes
-static_assert(sizeof(block_q5_k_lite) == 164, "wrong q5_k_lite block size/padding");
+// 144 + 28 = 172 bytes
+static_assert(sizeof(block_q5_k_lite) == 172, "wrong q5_k_lite block size/padding");
 
 #define Q6_K_LITE_BLOCK_SIZE    256
 #define Q6_K_LITE_MAX_RESIDUALS 8
@@ -563,15 +564,16 @@ typedef struct {
     uint8_t scales[3 * QK_K / 64];
     uint8_t qh[QK_K/8];
     uint8_t qs[QK_K/2];           // raw quantization indices
-    // INT8 extension (20 bytes)
+    // INT8 extension (28 bytes)
     uint8_t   residual_count;
     uint8_t   residual_idx[Q6_K_LITE_MAX_RESIDUALS];  // 8 bytes
     int8_t    residual_vals[Q6_K_LITE_MAX_RESIDUALS]; // 8 bytes
+    int8_t    idx[Q6_K_LITE_MAX_RESIDUALS];           // 8 bytes: sparse reconstruction pointers/offsets
     uint8_t   _pad;
     ggml_half residual_scale;
 } block_q6_k_lite;
-// 176 + 20 = 196 bytes
-static_assert(sizeof(block_q6_k_lite) == 196, "wrong q6_k_lite block size/padding");
+// 176 + 28 = 204 bytes
+static_assert(sizeof(block_q6_k_lite) == 204, "wrong q6_k_lite block size/padding");
 
 // This is only used for intermediate quantization and dot products
 typedef struct {
