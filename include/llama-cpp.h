@@ -28,3 +28,9 @@ typedef std::unique_ptr<llama_model, llama_model_deleter> llama_model_ptr;
 typedef std::unique_ptr<llama_context, llama_context_deleter> llama_context_ptr;
 typedef std::unique_ptr<llama_sampler, llama_sampler_deleter> llama_sampler_ptr;
 typedef std::unique_ptr<llama_adapter_lora, llama_adapter_lora_deleter> llama_adapter_lora_ptr;
+
+// --- HiFi outlier helpers (C++ convenience) ---
+
+inline int llama_q3_hifi_get_tensor_outliers() {
+    return ggml_q3_hifi_get_tensor_outliers();
+}

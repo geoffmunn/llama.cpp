@@ -2839,6 +2839,12 @@ extern "C" {
         GGML_SCHED_PRIO_REALTIME
     };
 
+    // HiFi outlier selection helpers
+    // Returns the number of outliers to preserve for the current tensor,
+    // calculated from model-size category, importance weight, and 3-sigma
+    // selection rules.  Use ggml_q3_hifi_set_tensor_outliers() to override.
+    GGML_API int ggml_q3_hifi_get_tensor_outliers(void);
+
     // threadpool params
     // Use ggml_threadpool_params_default() or ggml_threadpool_params_init() to populate the defaults
     struct ggml_threadpool_params {

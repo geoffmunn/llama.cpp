@@ -21,8 +21,57 @@ void ggml_q3_hifi_set_tensor_outliers(int outliers) {
     g_tls_tensor_outliers = outliers;
 }
 
+/* -----------------------------------------------------------------
+ *  Outlier count defaults per size category
+ *
+ *  3-sigma rule: weights beyond 3 standard deviations from the mean
+ *  are outlier candidates.  The base counts below are tuned so that
+ *  roughly the top-N by |weight| x importance survive the filter.
+ * -----------------------------------------------------------------
+ */
+
+static int ggml_q3_hifi_outlier_count_for_size(ggml_q3_hifi_size_category cat) {
+    switch (cat) {
+        case Q3_HIFI_SIZE_TINY:   return 2;  // small models need fewer outliers
+        case Q3_HIFI_SIZE_MEDIUM: return 4;  // sweet spot
+        default:
+        case Q3_HIFI_SIZE_LARGE:  return 8;  // large models preserve more
+    }
+}
+
 int ggml_q3_hifi_get_tensor_outliers(void) {
-    return g_tls_tensor_outliers;
+    /* If the caller explicitly set an outlier count, honour it. */
+    if (g_tls_tensor_outliers > 0) {
+        return g_tls_tensor_outliers;
+    }
+
+    /* Derive a sensible default from model size and importance.
+     *
+     * Selection rules (guide §5.2):
+     *   1. 3- sigma rule identifies candidate positions.
+     *   2. Magnitude ranking by |weight| x importance orders them.
+     *   3. N = base count scaled by importance, capped at max.
+     */
+    float model_params_b = 0.0f;
+    const ggml_hifi_quant_context * ctx = ggml_hifi_get_context();
+    if (ctx != NULL) {
+        model_params_b = ctx->model_params_b;
+    }
+
+    ggml_q3_hifi_size_category cat = ggml_q3_hifi_get_size_category(model_params_b);
+    int base = ggml_q3_hifi_outlier_count_for_size(cat);
+
+    /* Scale by tensor importance (0..1).  Low-importance tensors get
+     * fewer outliers; high-importance tensors get the full budget. */
+    float imp = g_tls_tensor_importance;
+    if (imp <= 0.0f) {
+        imp = 0.5f;  // neutral default when importance unknown
+    }
+    int n = (int)((float)base * imp);
+    if (n < 1) n = 1;
+    if (n > Q3_K_HIFI_MAX_OUTLIERS) n = Q3_K_HIFI_MAX_OUTLIERS;
+
+    return n;
 }
 
 void ggml_q3_hifi_set_tensor_importance(float importance) {
