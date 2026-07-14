@@ -36,3 +36,17 @@ GGML_API int ggml_q3_hifi_get_enhancement_type(float model_params_b, int is_embe
         return Q3_HIFI_ENHANCEMENT_HEAVY;
     }
 }
+
+/* ----------------------------------------------------------------- */
+/*  Attention V threshold                                            */
+/* ----------------------------------------------------------------- */
+
+GGML_API float ggml_q3_hifi_get_attn_v_threshold(float model_params_b) {
+    if (model_params_b <= 1.75f) {
+        return 0.02f;
+    } else if (model_params_b <= 8.5f) {
+        return 0.05f;
+    } else {
+        return 0.1f;
+    }
+}
