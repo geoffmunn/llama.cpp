@@ -8,14 +8,39 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 
+#include "ggml.h"
+
+#include <math.h>
+#include <assert.h>
+
 #include "ggml-quants-hifi.h"
+
+/* ----------------------------------------------------------------- */
+/*  Thread-local quantization context                                */
+/* ----------------------------------------------------------------- */
+
+static _Thread_local ggml_hifi_quant_context g_tls_hifi_ctx;
+static _Thread_local int g_tls_hifi_ctx_active = 0;
+
+const ggml_hifi_quant_context * ggml_hifi_get_context(void) {
+    return g_tls_hifi_ctx_active ? &g_tls_hifi_ctx : NULL;
+}
+
+void ggml_hifi_set_context(const ggml_hifi_quant_context * ctx) {
+    if (ctx != NULL) {
+        g_tls_hifi_ctx = *ctx;
+        g_tls_hifi_ctx_active = 1;
+    } else {
+        g_tls_hifi_ctx_active = 0;
+    }
+}
 
 /* ----------------------------------------------------------------- */
 /*  Thread-local per-tensor outlier state                            */
 /* ----------------------------------------------------------------- */
 
-static thread_local int   g_tls_tensor_outliers   = 0;
-static thread_local float g_tls_tensor_importance = 0.0f;
+static _Thread_local int   g_tls_tensor_outliers   = 0;
+static _Thread_local float g_tls_tensor_importance = 0.0f;
 
 void ggml_q3_hifi_set_tensor_outliers(int outliers) {
     g_tls_tensor_outliers = outliers;
@@ -116,7 +141,7 @@ int ggml_q3_hifi_compute_block_outliers(float block_outlier_ratio,
 /*  Q4_K_HIFI helpers                                                */
 /* ----------------------------------------------------------------- */
 
-static ggml_type get_hifi_enhanced_type(float model_params_b) {
+static enum ggml_type get_hifi_enhanced_type(float model_params_b) {
     return (model_params_b <= 5.0f) ? GGML_TYPE_Q5_K_HIFI_RES8
                                     : GGML_TYPE_Q6_K_HIFI_RES8;
 }

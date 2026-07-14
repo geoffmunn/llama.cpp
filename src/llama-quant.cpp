@@ -793,7 +793,7 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     size_t new_size = 0;
     bool valid = true;
     auto compute = [&mutex, &counter, &new_size, &valid, new_type, f32_data, new_data, chunk_size,
-            nrows, n_per_row, imatrix]() {
+            nrows, n_per_row, imatrix, hifi_ctx]() {
         const int64_t nrows_per_chunk = chunk_size / n_per_row;
         size_t local_size = 0;
         while (true) {
@@ -807,7 +807,9 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
             }
             lock.unlock();
             const int64_t this_nrow = std::min(nrows - first_row, nrows_per_chunk);
+            if (hifi_ctx) ggml_hifi_set_context(hifi_ctx);
             size_t this_size = ggml_quantize_chunk(new_type, f32_data, new_data, first_row * n_per_row, this_nrow, n_per_row, imatrix);
+            if (hifi_ctx) ggml_hifi_set_context(nullptr);
             local_size += this_size;
 
             // validate the quantized data
