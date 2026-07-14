@@ -116,6 +116,11 @@ int ggml_q3_hifi_compute_block_outliers(float block_outlier_ratio,
 /*  Q4_K_HIFI helpers                                                */
 /* ----------------------------------------------------------------- */
 
+static ggml_type get_hifi_enhanced_type(float model_params_b) {
+    return (model_params_b <= 5.0f) ? GGML_TYPE_Q5_K_HIFI_RES8
+                                    : GGML_TYPE_Q6_K_HIFI_RES8;
+}
+
 int ggml_q4_hifi_get_max_outliers(float model_params_b) {
     (void)model_params_b;
     return Q4_K_HIFI_MAX_OUTLIERS;
