@@ -1,0 +1,1 @@
+#define Q3_K_LITE_BLOCK_SIZE    256
