@@ -435,7 +435,9 @@ extern "C" {
         GGML_TYPE_Q4_K_LITE    = 45,
         GGML_TYPE_Q5_K_LITE    = 46,
         GGML_TYPE_Q6_K_LITE    = 47,
-        GGML_TYPE_COUNT        = 48,
+        GGML_TYPE_Q5_K_HIFI_RES8 = 48,
+        GGML_TYPE_Q6_K_HIFI_RES8 = 49,
+        GGML_TYPE_COUNT        = 50,
     };
 
     // precision
