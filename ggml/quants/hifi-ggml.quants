@@ -1,0 +1,9 @@
+// Thread-local context passed into quantization functions
+typedef struct {
+    int   outlier_count;     // 1-8; number of outliers to preserve
+    float layer_importance;  // 0.0-1.0; from imatrix aggregation
+    int   layer_idx;         // current layer (debugging)
+    int   total_layers;      // total model layers (debugging)
+    int   is_active;         // 1 = adaptive mode on
+    float model_params_b;    // model size in billions
+} ggml_hifi_quant_context;
