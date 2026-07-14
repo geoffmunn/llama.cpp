@@ -10,3 +10,6 @@ typedef struct {
 
 GGML_API const ggml_hifi_quant_context* ggml_hifi_get_context();
 GGML_API void ggml_hifi_set_context(const ggml_hifi_quant_context* ctx);
+
+GGML_API int ggml_hifi_compute_outlier_count(int layer_idx, int total_layers,
+                                              float layer_importance, float model_params_b);
