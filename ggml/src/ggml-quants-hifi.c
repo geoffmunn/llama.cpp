@@ -157,3 +157,59 @@ void ggml_q6_k_hifi_res8_compute_errors(const float * GGML_RESTRICT x,
         err[i] = x[i] - base_decoded[i];
     }
 }
+
+/* ----------------------------------------------------------------- */
+/*  INT8 Residual Correction — Step 4: select top-N positions         */
+/* -----------------------------------------------------------------
+ *
+ *  Select the top-N positions by weighted residual magnitude:
+ *
+ *      score[i] = |err[i]| * imatrix_importance[i]
+ *
+ *  Uses a partial sort (selection into the N largest slots) to avoid
+ *  sorting all k elements.
+ * ----------------------------------------------------------------- */
+
+void ggml_q6_k_hifi_res8_select_top_n(const float * GGML_RESTRICT err,
+                                      const float * GGML_RESTRICT imatrix_importance,
+                                      int64_t k,
+                                      int max_outliers,
+                                      uint8_t * GGML_RESTRICT outlier_idx,
+                                      int * GGML_RESTRICT actual_count) {
+    assert(max_outliers > 0);
+    assert(actual_count != NULL);
+
+    /* Build candidate list with weighted scores */
+    struct {
+        float score;
+        int   idx;
+    } candidates[(int)k];
+
+    for (int64_t j = 0; j < k; ++j) {
+        candidates[j].idx = (int)j;
+        candidates[j].score = fabsf(err[j]) * imatrix_importance[j];
+    }
+
+    /* Partial sort: bubble the top max_outliers to the front */
+    for (int o = 0; o < max_outliers; ++o) {
+        for (int64_t j = o + 1; j < k; ++j) {
+            if (candidates[j].score > candidates[o].score) {
+                float tmp_score = candidates[o].score;
+                candidates[o].score = candidates[j].score;
+                candidates[j].score = tmp_score;
+                int tmp_idx = candidates[o].idx;
+                candidates[o].idx = candidates[j].idx;
+                candidates[j].idx = tmp_idx;
+            }
+        }
+    }
+
+    /* Collect results — skip zero-score entries */
+    int count = 0;
+    for (int o = 0; o < max_outliers; ++o) {
+        if (candidates[o].score > 0.0f) {
+            outlier_idx[count++] = (uint8_t)candidates[o].idx;
+        }
+    }
+    *actual_count = count;
+}

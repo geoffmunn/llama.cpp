@@ -126,6 +126,14 @@ GGML_API void ggml_q6_k_hifi_res8_compute_errors(const float * GGML_RESTRICT x,
                                                   float * GGML_RESTRICT err,
                                                   int64_t k);
 
+// INT8 Residual Correction — Step 4: select top-N positions by |err[i]| * imatrix_importance[i]
+GGML_API void ggml_q6_k_hifi_res8_select_top_n(const float * GGML_RESTRICT err,
+                                                const float * GGML_RESTRICT imatrix_importance,
+                                                int64_t k,
+                                                int max_outliers,
+                                                uint8_t * GGML_RESTRICT outlier_idx,
+                                                int * GGML_RESTRICT actual_count);
+
 #ifdef __cplusplus
 }
 #endif
