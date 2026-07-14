@@ -38,6 +38,17 @@ GGML_API int ggml_q3_hifi_get_enhancement_type(float model_params_b, int is_embe
 }
 
 /* ----------------------------------------------------------------- */
+/*  TLS per-tensor outlier control                                   */
+/* ----------------------------------------------------------------- */
+
+extern "C" {
+
+GGML_API void ggml_q3_hifi_set_tensor_outliers(int outliers);
+GGML_API int  ggml_q3_hifi_get_tensor_outliers(void);
+
+}
+
+/* ----------------------------------------------------------------- */
 /*  Attention V threshold                                            */
 /* ----------------------------------------------------------------- */
 

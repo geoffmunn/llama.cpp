@@ -5,7 +5,24 @@
  * @brief Layer-adaptive (HiFi) quantization context and utility API.
  */
 
+#define GGML_COMMON_DECL_C
+#include "ggml-common.h"
+
 #include "ggml-quants-hifi.h"
+
+/* ----------------------------------------------------------------- */
+/*  Thread-local per-tensor outlier state                            */
+/* ----------------------------------------------------------------- */
+
+static thread_local int g_tls_tensor_outliers = 0;
+
+void ggml_q3_hifi_set_tensor_outliers(int outliers) {
+    g_tls_tensor_outliers = outliers;
+}
+
+int ggml_q3_hifi_get_tensor_outliers(void) {
+    return g_tls_tensor_outliers;
+}
 
 /* ----------------------------------------------------------------- */
 /*  Q3_K_HIFI model-size classification                              */
