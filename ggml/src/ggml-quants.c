@@ -727,7 +727,7 @@ static float make_qkx1_quants(int n, int nmax, const float * GGML_RESTRICT x, ui
         scale = sumlx/suml2;
         float sum = 0;
         for (int i = 0; i < n; ++i) {
-            sum += x[i] - scale*L[i];
+            sum += (double)x[i] - scale*L[i];
         }
         min = alpha*min + (1 - alpha)*sum/n;
         if (min > 0) min = 0;
