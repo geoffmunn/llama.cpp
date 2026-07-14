@@ -61,6 +61,27 @@ static void ggml_q3_hifi_set_tensor_outliers_local(int outliers) {
     g_hifi_tensor_outliers = outliers;
 }
 
+// Imatrix guidance thresholds for Q3_K_HIFI
+// Returns the fraction of input projections eligible for guided quantization.
+//   <=2B  -> 0.0  (DISABLE — hurts quality on small models)
+//   2-5B  -> 0.3  (top 30%)
+//   5-10B -> 0.2  (top 20%)
+//   10-20B-> 0.15 (top 15%)
+//   >20B  -> 0.1  (top 10%)
+static float get_q3_k_hifi_guidance_fraction(float model_params_b) {
+    if (model_params_b <= 2.0f) {
+        return 0.0f;   // DISABLE
+    } else if (model_params_b <= 5.0f) {
+        return 0.3f;   // Top 30%
+    } else if (model_params_b <= 10.0f) {
+        return 0.2f;   // Top 20%
+    } else if (model_params_b <= 20.0f) {
+        return 0.15f;  // Top 15%
+    } else {
+        return 0.1f;   // Top 10%
+    }
+}
+
 // Imatrix guidance for Q3_K_HIFI
 struct tensor_importance_entry {
     std::string name;
