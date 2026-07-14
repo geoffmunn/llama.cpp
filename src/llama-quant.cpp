@@ -776,10 +776,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
 // quantization implementation
 //
 
-static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread) {
+static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread, const ggml_hifi_quant_context * hifi_ctx) {
     if (nthread < 2) {
         // single-thread
+        if (hifi_ctx) ggml_hifi_set_context(hifi_ctx);
         size_t new_size = ggml_quantize_chunk(new_type, f32_data, new_data, 0, nrows, n_per_row, imatrix);
+        if (hifi_ctx) ggml_hifi_set_context(nullptr);
         if (!ggml_validate_row_data(new_type, new_data, new_size)) {
             throw std::runtime_error("quantized data validation failed");
         }
@@ -1213,7 +1215,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const ggml_type cur_type = tensor->type;
         const ggml_type new_type = tm.target_type;
 
-        struct ggml_hifi_quant_context { };
         ggml_hifi_quant_context hifi_ctx = {};
         const ggml_hifi_quant_context * hifi_ctx_ptr = nullptr;
 
@@ -1331,7 +1332,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         ggml_q3_hifi_set_tensor_outliers_local(q4_outliers);
                     }
 
-                    new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
+                    new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use, hifi_ctx_ptr);
                 }
                 LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
             }
