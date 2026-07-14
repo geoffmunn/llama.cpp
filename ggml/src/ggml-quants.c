@@ -1492,6 +1492,65 @@ size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrow * row_size;
 }
 
+// -----------------------------------------------------------------
+// Temp buffer mechanism for weighted copies
+//
+// Provides a reusable temporary float buffer for hifi/lite quantizers.
+// Pattern: copy weights → zero outlier positions → quantize zeroed copy
+// The buffer is allocated once per row and reused across blocks.
+// -----------------------------------------------------------------
+
+typedef struct {
+    float * buf;       // aligned buffer (NULL when unused)
+    int64_t capacity;  // number of floats allocated
+    int64_t row_len;   // number of floats needed for current row
+} ggml_quant_temp_buf;
+
+static inline void ggml_quant_temp_buf_init(ggml_quant_temp_buf * tb, int64_t n_per_row) {
+    tb->buf = NULL;
+    tb->capacity = 0;
+    tb->row_len = n_per_row;
+}
+
+static inline void ggml_quant_temp_buf_ensure(ggml_quant_temp_buf * tb) {
+    if (tb->buf == NULL || tb->capacity < tb->row_len) {
+        if (tb->buf != NULL) {
+            ggml_aligned_free(tb->buf, tb->capacity * sizeof(float));
+        }
+        tb->capacity = tb->row_len;
+        tb->buf = (float *)ggml_aligned_malloc(tb->row_len * sizeof(float));
+        assert(tb->buf != NULL && "Failed to allocate temp quantization buffer");
+    }
+}
+
+static inline void ggml_quant_temp_buf_free(ggml_quant_temp_buf * tb) {
+    if (tb->buf != NULL) {
+        ggml_aligned_free(tb->buf, tb->capacity * sizeof(float));
+        tb->buf = NULL;
+        tb->capacity = 0;
+    }
+}
+
+static inline void ggml_quant_temp_buf_copy(const float * src, ggml_quant_temp_buf * tb) {
+    ggml_quant_temp_buf_ensure(tb);
+    memcpy(tb->buf, src, tb->row_len * sizeof(float));
+}
+
+static inline void ggml_quant_temp_buf_zero_outliers(ggml_quant_temp_buf * tb,
+                                                     const int * outlier_idx,
+                                                     int outlier_count) {
+    for (int i = 0; i < outlier_count; ++i) {
+        int idx = outlier_idx[i];
+        if (idx >= 0 && idx < tb->row_len) {
+            tb->buf[idx] = 0.0f;
+        }
+    }
+}
+
+static inline float * ggml_quant_temp_buf_data(ggml_quant_temp_buf * tb) {
+    return tb->buf;
+}
+
 // ====================== 4-bit (de)-quantization
 
 void quantize_row_q4_K_ref(const float * GGML_RESTRICT x, block_q4_K * GGML_RESTRICT y, int64_t k) {
