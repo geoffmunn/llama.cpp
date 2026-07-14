@@ -917,6 +917,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_q2_k_hifi,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q2_k_hifi_ref,
     },
+    [GGML_TYPE_Q4_K_HIFI] = {
+        .type_name                = "q4_K_hifi",
+        .blck_size                = Q4_K_HIFI_BLOCK_SIZE,
+        .type_size                = sizeof(block_q4_k_hifi),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q4_k_hifi,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q4_k_hifi_ref,
+    },
     [36] = { // GGML_TYPE_IQ4_NL_4_4
         .type_name                = "TYPE_IQ4_NL_4_4 REMOVED, use IQ4_NL with runtime repacking",
         .blck_size                = 0,
@@ -7781,6 +7789,7 @@ size_t ggml_quantize_chunk(
                 result = n * elemsize;
                 memcpy((uint8_t *)dst + start * elemsize, src + start, result);
             } break;
+        case GGML_TYPE_Q4_K_HIFI:  result = quantize_q4_k_hifi(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         default:
             assert(false);
     }

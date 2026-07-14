@@ -1578,6 +1578,98 @@ size_t quantize_q3_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT 
     return nrow * row_size;
 }
 
+// ====================== Q4_K_HIFI (de)-quantization
+
+void quantize_row_q4_k_hifi_ref(const float * GGML_RESTRICT x, block_q4_k_hifi * GGML_RESTRICT y, int64_t k) {
+    assert(k % Q4_K_HIFI_BLOCK_SIZE == 0);
+    const int nb = k / Q4_K_HIFI_BLOCK_SIZE;
+
+    for (int i = 0; i < nb; ++i) {
+        const float * xb = x + i * Q4_K_HIFI_BLOCK_SIZE;
+
+        // Step 1: Quantize with standard Q4_K first
+        quantize_row_q4_K_ref(xb, (block_q4_K *)y[i].q4_k_data, Q4_K_HIFI_BLOCK_SIZE);
+
+        // Step 2: Dequantize to get base approximation
+        float tmp[Q4_K_HIFI_BLOCK_SIZE];
+        dequantize_row_q4_K((const block_q4_K *)y[i].q4_k_data, tmp, Q4_K_HIFI_BLOCK_SIZE);
+
+        // Step 3: Find top outliers by absolute residual
+        struct outlier_candidate {
+            int idx;
+            float err;
+        } candidates[Q4_K_HIFI_BLOCK_SIZE];
+
+        for (int j = 0; j < Q4_K_HIFI_BLOCK_SIZE; ++j) {
+            candidates[j].idx = j;
+            candidates[j].err = fabsf(xb[j] - tmp[j]);
+        }
+
+        // Partial sort to find top Q4_K_HIFI_OUTLIERS
+        for (int o = 0; o < Q4_K_HIFI_OUTLIERS; ++o) {
+            for (int j = o + 1; j < Q4_K_HIFI_BLOCK_SIZE; ++j) {
+                if (candidates[j].err > candidates[o].err) {
+                    float tmp_err = candidates[o].err;
+                    candidates[o].err = candidates[j].err;
+                    candidates[j].err = tmp_err;
+                    int tmp_idx = candidates[o].idx;
+                    candidates[o].idx = candidates[j].idx;
+                    candidates[j].idx = tmp_idx;
+                }
+            }
+        }
+
+        // Step 4: Zero outlier positions and re-quantize base
+        float xb_copy[Q4_K_HIFI_BLOCK_SIZE];
+        memcpy(xb_copy, xb, Q4_K_HIFI_BLOCK_SIZE * sizeof(float));
+        for (int o = 0; o < Q4_K_HIFI_OUTLIERS; ++o) {
+            xb_copy[candidates[o].idx] = 0.0f;
+        }
+        quantize_row_q4_K_ref(xb_copy, (block_q4_K *)y[i].q4_k_data, Q4_K_HIFI_BLOCK_SIZE);
+
+        // Step 5: Store outlier info (sorted ascending by index)
+        for (int o = 0; o < Q4_K_HIFI_OUTLIERS; ++o) {
+            int best = o;
+            for (int j = o + 1; j < Q4_K_HIFI_OUTLIERS; ++j) {
+                if (candidates[j].idx < candidates[best].idx) {
+                    best = j;
+                }
+            }
+            struct outlier_candidate t = candidates[o];
+            candidates[o] = candidates[best];
+            candidates[best] = t;
+            y[i].outlier_idx[o] = (uint8_t)candidates[o].idx;
+            y[i].outliers[o] = GGML_FP32_TO_FP16(xb[candidates[o].idx]);
+        }
+    }
+}
+
+void dequantize_row_q4_k_hifi(const block_q4_k_hifi * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % Q4_K_HIFI_BLOCK_SIZE == 0);
+    const int nb = k / Q4_K_HIFI_BLOCK_SIZE;
+
+    for (int i = 0; i < nb; ++i) {
+        // Dequantize base Q4_K
+        dequantize_row_q4_K((const block_q4_K *)x[i].q4_k_data, y + i * Q4_K_HIFI_BLOCK_SIZE, Q4_K_HIFI_BLOCK_SIZE);
+
+        // Replace outlier positions with FP16 values
+        for (int o = 0; o < Q4_K_HIFI_OUTLIERS; ++o) {
+            y[i * Q4_K_HIFI_BLOCK_SIZE + x[i].outlier_idx[o]] = GGML_FP16_TO_FP32(x[i].outliers[o]);
+        }
+    }
+}
+
+size_t quantize_q4_k_hifi(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * GGML_RESTRICT quant_weights) {
+    size_t row_size = n_per_row / Q4_K_HIFI_BLOCK_SIZE * sizeof(block_q4_k_hifi);
+    if (!quant_weights) {
+        quantize_row_q4_k_hifi_ref(src, (block_q4_k_hifi *)dst, nrow * n_per_row);
+    } else {
+        // TODO: imatrix-guided quantization
+        quantize_row_q4_k_hifi_ref(src, (block_q4_k_hifi *)dst, nrow * n_per_row);
+    }
+    return nrow * row_size;
+}
+
 // -----------------------------------------------------------------
 // Temp buffer mechanism for weighted copies
 //
