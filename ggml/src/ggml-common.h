@@ -524,6 +524,8 @@ typedef struct {
 static_assert(sizeof(block_q5_k_hifi_res8) == 196,
               "wrong q5_k_hifi_res8 block size/padding");
 
+#define Q5_K_LITE_BLOCK_SIZE    256
+
 // This is only used for intermediate quantization and dot products
 typedef struct {
     float   d;              // delta
