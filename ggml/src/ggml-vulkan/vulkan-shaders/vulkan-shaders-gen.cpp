@@ -68,6 +68,19 @@ const std::vector<std::string> type_names = {
     "mxfp4",
     "nvfp4",
     "bf16",
+    "q2_k_hifi",
+    "q4_k_hifi",
+    "q2_k_lite",
+    "q3_k_lite",
+    "q4_k_lite",
+    "q5_k_lite",
+    "q6_k_lite",
+    "q5_k_hifi_res8",
+    "q6_k_hifi_res8",
+    "q3_k_hifi",
+    "q6_k_hifi",
+    "q6_k_hifi_dynamic",
+    "q3_k_hifi_res8",
 };
 
 enum MatMulIdType {
