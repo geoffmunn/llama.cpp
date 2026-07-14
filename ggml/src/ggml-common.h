@@ -373,11 +373,11 @@ static_assert(sizeof(block_q6_K) == sizeof(ggml_half) + QK_K / 16 + 3*QK_K/4, "w
 #pragma pack(push, 1)
 #endif
 typedef struct {
-    uint8_t  q3_k_data[110];                  // standard Q3_K block (outlier positions zeroed)
-    uint8_t  outlier_idx[Q3_K_HIFI_OUTLIERS]; // 8 indices (0–255), sorted ascending
-    ggml_half outliers[Q3_K_HIFI_OUTLIERS];   // 8 FP16 replacement values
-    uint8_t  outlier_count;                   // actual number of outliers stored (0–8)
-    uint8_t  _pad;                            // reserved; keep 136-byte total
+    block_q3_K   base;                              // standard Q3_K block (outlier positions zeroed)
+    uint8_t  outlier_idx[Q3_K_HIFI_OUTLIERS];       // 8 indices (0–255), sorted ascending
+    ggml_half outliers[Q3_K_HIFI_OUTLIERS];         // 8 FP16 replacement values
+    uint8_t  outlier_count;                         // actual number of outliers stored (0–8)
+    uint8_t  _pad;                                  // reserved; keep 136-byte total
 } block_q3_k_hifi;
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(pop)
@@ -395,10 +395,7 @@ static_assert(sizeof(block_q3_k_hifi) == 110 + Q3_K_HIFI_OUTLIERS
 #endif
 typedef struct {
     // Q3_K-compatible region (110 bytes) — DO NOT REORDER
-    uint8_t  hmask[QK_K/8];                              // 32 bytes
-    uint8_t  qs[QK_K/4];                                 // 64 bytes
-    uint8_t  scales[12];                                 // 12 bytes
-    ggml_half d;                                         //  2 bytes
+    block_q3_K   base;
     // INT8 residual extension (22 bytes)
     uint8_t outlier_count;                               // 1
     uint8_t _pad1;                                       // 1 alignment
@@ -427,12 +424,7 @@ static_assert(sizeof(block_q3_k_hifi_res8)
 #endif
 typedef struct {
     // Q2_K-compatible region (84 bytes) — DO NOT REORDER
-    uint8_t scales[QK_K/16];  // 16 bytes
-    uint8_t qs[QK_K/4];       // 64 bytes
-    GGML_EXTENSION union {
-        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
-        ggml_half2 dm;
-    } GGML_COMMON_AGGR_U;
+    block_q2_K   base;
     // FP16 outlier extension (12 bytes)
     uint8_t   outlier_count;                       // 1: actual count (0–3)
     uint8_t   outlier_idx[Q2_K_HIFI_MAX_OUTLIERS]; // 3: positions (0–255)
@@ -457,9 +449,9 @@ static_assert(sizeof(block_q2_k_hifi) == 96,
 #pragma pack(push, 1)
 #endif
 typedef struct {
-    uint8_t  q4_k_data[144];                  // standard Q4_K block (outlier positions zeroed)
-    uint8_t  outlier_idx[Q4_K_HIFI_OUTLIERS]; // 8 indices (0–255), sorted ascending
-    ggml_half outliers[Q4_K_HIFI_OUTLIERS];   // 8 FP16 replacement values
+    block_q4_K   base;                              // standard Q4_K block (outlier positions zeroed)
+    uint8_t  outlier_idx[Q4_K_HIFI_OUTLIERS];       // 8 indices (0–255), sorted ascending
+    ggml_half outliers[Q4_K_HIFI_OUTLIERS];         // 8 FP16 replacement values
 } block_q4_k_hifi;
 #if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
 #pragma pack(pop)
@@ -480,10 +472,7 @@ static_assert(sizeof(block_q4_k_hifi) == 144 + Q4_K_HIFI_OUTLIERS
 #endif
 typedef struct {
     // Q6_K-compatible region (210 bytes)
-    uint8_t  ql[QK_K/2];
-    uint8_t  qh[QK_K/4];
-    int8_t   scales[QK_K/16];
-    ggml_half d;
+    block_q6_K   base;
     // INT8 residual extension (22 bytes)
     uint8_t outlier_count;                              // 1: actual count (1–8)
     uint8_t outlier_idx[Q6_K_HIFI_RES8_MAX_OUTLIERS];  // 8: positions (0–255)
@@ -503,13 +492,7 @@ static_assert(sizeof(block_q6_k_hifi_res8) == 232,
 #endif
 typedef struct {
     // Q5_K-compatible region (176 bytes)
-    GGML_EXTENSION union {
-        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
-        ggml_half2 dm;
-    } GGML_COMMON_AGGR_U;
-    uint8_t scales[K_SCALE_SIZE]; // 12 bytes
-    uint8_t qh[QK_K/8];           // 32 bytes: high bit
-    uint8_t qs[QK_K/2];           // 128 bytes: low 4 bits
+    block_q5_K   base;
     // Compact INT8 residual extension (20 bytes)
     uint8_t outlier_count;                               // 1: actual count (0–8; 0 = no enhancement)
     uint8_t outlier_idx[Q5_K_HIFI_RES8_MAX_OUTLIERS];    // 8: positions
@@ -529,15 +512,7 @@ static_assert(sizeof(block_q5_k_hifi_res8) == 196,
 
 typedef struct {
     // Q4_K base (144 bytes): dm[4] + scales[12] + qs[128]
-    GGML_EXTENSION union {
-        struct {
-            ggml_half d;    // super-block scale for quantized scales
-            ggml_half dmin; // super-block scale for quantized mins
-        } GGML_COMMON_AGGR_S;
-        ggml_half2 dm;
-    } GGML_COMMON_AGGR_U;
-    uint8_t scales[3*QK_K/64];
-    uint8_t qs[QK_K/2];           // raw quantization indices
+    block_q4_K   base;
     // INT8 extension (28 bytes)
     uint8_t   residual_count;
     uint8_t   outlier_idx[Q5_K_LITE_MAX_RESIDUALS];  // 8 bytes
@@ -554,16 +529,7 @@ static_assert(sizeof(block_q5_k_lite) == 172, "wrong q5_k_lite block size/paddin
 
 typedef struct {
     // Q5_K base (176 bytes): dm[4] + scales[12] + qh[32] + qs[128]
-    GGML_EXTENSION union {
-        struct {
-            ggml_half d;    // super-block scale for quantized scales
-            ggml_half dmin; // super-block scale for quantized mins
-        } GGML_COMMON_AGGR_S;
-        ggml_half2 dm;
-    } GGML_COMMON_AGGR_U;
-    uint8_t scales[3 * QK_K / 64];
-    uint8_t qh[QK_K/8];
-    uint8_t qs[QK_K/2];           // raw quantization indices
+    block_q5_K   base;
     // INT8 extension (28 bytes)
     uint8_t   residual_count;
     uint8_t   outlier_idx[Q6_K_LITE_MAX_RESIDUALS];  // 8 bytes

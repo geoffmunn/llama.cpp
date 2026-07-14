@@ -1490,11 +1490,11 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
         const float * xb = x + i * Q3_K_HIFI_BLOCK_SIZE;
 
         // Step 1: Quantize with standard Q3_K first
-        quantize_row_q3_K_ref(xb, (block_q3_K *)y[i].q3_k_data, Q3_K_HIFI_BLOCK_SIZE);
+        quantize_row_q3_K_ref(xb, &y[i].base, Q3_K_HIFI_BLOCK_SIZE);
 
         // Step 2: Dequantize to get base approximation
         float tmp[Q3_K_HIFI_BLOCK_SIZE];
-        dequantize_row_q3_K((const block_q3_K *)y[i].q3_k_data, tmp, Q3_K_HIFI_BLOCK_SIZE);
+        dequantize_row_q3_K(&y[i].base, tmp, Q3_K_HIFI_BLOCK_SIZE);
 
         // Step 3: Find top outliers by absolute residual
         struct outlier_candidate {
@@ -1527,7 +1527,7 @@ void quantize_row_q3_k_hifi_ref(const float * GGML_RESTRICT x, block_q3_k_hifi *
         for (int o = 0; o < Q3_K_HIFI_OUTLIERS; ++o) {
             xb_copy[candidates[o].idx] = 0.0f;
         }
-        quantize_row_q3_K_ref(xb_copy, (block_q3_K *)y[i].q3_k_data, Q3_K_HIFI_BLOCK_SIZE);
+        quantize_row_q3_K_ref(xb_copy, &y[i].base, Q3_K_HIFI_BLOCK_SIZE);
 
         // Step 5: Store outlier info (sorted ascending by index)
         y[i].outlier_count = (uint8_t)Q3_K_HIFI_OUTLIERS;
@@ -1557,7 +1557,7 @@ void dequantize_row_q3_k_hifi(const block_q3_k_hifi * GGML_RESTRICT x, float * G
 
     for (int i = 0; i < nb; ++i) {
         // Dequantize base Q3_K
-        dequantize_row_q3_K((const block_q3_K *)x[i].q3_k_data, y + i * Q3_K_HIFI_BLOCK_SIZE, Q3_K_HIFI_BLOCK_SIZE);
+        dequantize_row_q3_K(&x[i].base, y + i * Q3_K_HIFI_BLOCK_SIZE, Q3_K_HIFI_BLOCK_SIZE);
 
         // Replace outlier positions with FP16 values
         const int count = x[i].outlier_count;
@@ -1588,11 +1588,11 @@ void quantize_row_q4_k_hifi_ref(const float * GGML_RESTRICT x, block_q4_k_hifi *
         const float * xb = x + i * Q4_K_HIFI_BLOCK_SIZE;
 
         // Step 1: Quantize with standard Q4_K first
-        quantize_row_q4_K_ref(xb, (block_q4_K *)y[i].q4_k_data, Q4_K_HIFI_BLOCK_SIZE);
+        quantize_row_q4_K_ref(xb, &y[i].base, Q4_K_HIFI_BLOCK_SIZE);
 
         // Step 2: Dequantize to get base approximation
         float tmp[Q4_K_HIFI_BLOCK_SIZE];
-        dequantize_row_q4_K((const block_q4_K *)y[i].q4_k_data, tmp, Q4_K_HIFI_BLOCK_SIZE);
+        dequantize_row_q4_K(&y[i].base, tmp, Q4_K_HIFI_BLOCK_SIZE);
 
         // Step 3: Find top outliers by absolute residual
         struct outlier_candidate {
@@ -1625,7 +1625,7 @@ void quantize_row_q4_k_hifi_ref(const float * GGML_RESTRICT x, block_q4_k_hifi *
         for (int o = 0; o < Q4_K_HIFI_OUTLIERS; ++o) {
             xb_copy[candidates[o].idx] = 0.0f;
         }
-        quantize_row_q4_K_ref(xb_copy, (block_q4_K *)y[i].q4_k_data, Q4_K_HIFI_BLOCK_SIZE);
+        quantize_row_q4_K_ref(xb_copy, &y[i].base, Q4_K_HIFI_BLOCK_SIZE);
 
         // Step 5: Store outlier info (sorted ascending by index)
         for (int o = 0; o < Q4_K_HIFI_OUTLIERS; ++o) {
@@ -1650,7 +1650,7 @@ void dequantize_row_q4_k_hifi(const block_q4_k_hifi * GGML_RESTRICT x, float * G
 
     for (int i = 0; i < nb; ++i) {
         // Dequantize base Q4_K
-        dequantize_row_q4_K((const block_q4_K *)x[i].q4_k_data, y + i * Q4_K_HIFI_BLOCK_SIZE, Q4_K_HIFI_BLOCK_SIZE);
+        dequantize_row_q4_K(&x[i].base, y + i * Q4_K_HIFI_BLOCK_SIZE, Q4_K_HIFI_BLOCK_SIZE);
 
         // Replace outlier positions with FP16 values
         for (int o = 0; o < Q4_K_HIFI_OUTLIERS; ++o) {

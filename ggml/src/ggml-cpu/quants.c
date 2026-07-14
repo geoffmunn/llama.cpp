@@ -1298,7 +1298,7 @@ void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
     for (int i = 0; i < nb; i++) {
         float block_dot = 0.0f;
         ggml_vec_dot_q3_K_q8_K(QK_K, &block_dot, sizeof(float),
-                                bx_hifi[i].q3_k_data, sizeof(block_q3_K),
+                                &bx_hifi[i].base, sizeof(block_q3_K),
                                 &by_q8[i], sizeof(block_q8_K), 1);
         result += block_dot;
         // Use outlier_count for safe loop bound (avoids sentinel pitfall with uint8_t indices)
