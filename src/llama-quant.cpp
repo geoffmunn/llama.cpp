@@ -16,6 +16,10 @@
 #define GGML_COMMON_DECL_CPP
 #include "../ggml/src/ggml-common.h"
 
+extern "C" {
+#include "../ggml/src/ggml-quants-hifi.h"
+}
+
 // result of parsing --tensor-type option
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
 struct tensor_type_option {
