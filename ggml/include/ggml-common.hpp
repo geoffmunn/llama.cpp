@@ -12,6 +12,10 @@ typedef uint16_t ggml_half;
 #define Q3_K_HIFI_OUTLIERS   8
 #endif
 
+#ifndef Q4_K_HIFI_OUTLIERS
+#define Q4_K_HIFI_OUTLIERS   8
+#endif
+
 #pragma pack(push, 1)
 struct block_q3_k_hifi {
     uint8_t  q3_k_data[110];                  // standard Q3_K block (outlier positions zeroed)
