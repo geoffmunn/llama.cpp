@@ -419,6 +419,33 @@ static_assert(sizeof(block_q3_k_hifi_res8)
 #define Q2_K_HIFI_MAX_OUTLIERS       3
 #define Q2_K_HIFI_RESIDUAL_MODE_FLAG 0x80
 
+// -----------------------------------------------------------------
+// Q2_K_HIFI — FP16 outlier replacement variant (96 bytes)
+// -----------------------------------------------------------------
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(push, 1)
+#endif
+typedef struct {
+    // Q2_K-compatible region (84 bytes) — DO NOT REORDER
+    uint8_t scales[QK_K/16];  // 16 bytes
+    uint8_t qs[QK_K/4];       // 64 bytes
+    GGML_EXTENSION union {
+        struct { ggml_half d; ggml_half dmin; } GGML_COMMON_AGGR_S;
+        ggml_half2 dm;
+    } GGML_COMMON_AGGR_U;
+    // FP16 outlier extension (12 bytes)
+    uint8_t   outlier_count;                       // 1: actual count (0–3)
+    uint8_t   outlier_idx[Q2_K_HIFI_MAX_OUTLIERS]; // 3: positions (0–255)
+    ggml_half outlier_vals[Q2_K_HIFI_MAX_OUTLIERS]; // 6: FP16 replacement values
+    uint8_t   _pad[2];                             // 2: align to 96 bytes
+} block_q2_k_hifi;
+#if !defined(GGML_COMMON_DECL_METAL) && !defined(GGML_COMMON_DECL_CUDA) && !defined(GGML_COMMON_DECL_HIP)
+#pragma pack(pop)
+#endif
+// 84 + 12 = 96 bytes -> 3.0 BPW
+static_assert(sizeof(block_q2_k_hifi) == 96,
+              "wrong q2_k_hifi block size/padding");
+
 #define Q4_K_HIFI_BLOCK_SIZE 256
 #define Q4_K_HIFI_OUTLIERS   8
 #define Q4_K_HIFI_INLIERS    248
