@@ -21,6 +21,46 @@ extern "C" {
 #include "../ggml/src/ggml-quants-hifi.h"
 }
 
+#include "quantize.h"
+
+// -----------------------------------------------------------------
+// Local implementations of HiFi helper functions (avoid linker deps)
+// -----------------------------------------------------------------
+
+static float get_hifi_enhancement_threshold_local(float model_params_b) {
+    if (model_params_b <= 1.75f) {
+        return 0.5f;
+    } else if (model_params_b <= 8.5f) {
+        return 0.25f;
+    } else {
+        return 0.125f;
+    }
+}
+
+static float ggml_hifi_compute_tensor_importance_local(const float * imatrix_data, int64_t n_elements) {
+    if (imatrix_data == nullptr || n_elements <= 0) {
+        return 0.0f;
+    }
+    float sum = 0.0f;
+    for (int64_t i = 0; i < n_elements; i++) {
+        sum += fabsf(imatrix_data[i]);
+    }
+    float mean = sum / (float) n_elements;
+    return 1.0f / (1.0f + expf(-mean));
+}
+
+static int ggml_q4_hifi_get_max_outliers_local(float model_params_b) {
+    // Return Q4_K_HIFI_MAX_OUTLIERS for all model sizes (conservative default)
+    return Q4_K_HIFI_MAX_OUTLIERS;
+}
+
+// TLS-based outlier storage for Q4_K_HIFI (local to this translation unit)
+static thread_local int g_hifi_tensor_outliers = Q4_K_HIFI_MAX_OUTLIERS;
+
+static void ggml_q3_hifi_set_tensor_outliers_local(int outliers) {
+    g_hifi_tensor_outliers = outliers;
+}
+
 // Imatrix guidance for Q3_K_HIFI
 struct tensor_importance_entry {
     std::string name;
@@ -1277,6 +1317,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     const float * f32_data_03 = f32_data + i03 * nelements_matrix;
                     void * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row) * i03 * nrows;
                     const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
+
+                    // Q4_K_HIFI: per-tensor outlier count via TLS
+                    if (new_type == GGML_TYPE_Q4_K_HIFI) {
+                        float model_params_b = ml.n_elements / 1e9f;
+                        float high_importance_threshold = get_hifi_enhancement_threshold_local(model_params_b);
+                        int q4_outliers = ggml_q4_hifi_get_max_outliers_local(model_params_b);
+                        if (imatrix_03) {
+                            float importance = ggml_hifi_compute_tensor_importance_local(imatrix_03, n_per_row);
+                            if (importance > high_importance_threshold)
+                                q4_outliers = Q4_K_HIFI_MAX_OUTLIERS;
+                        }
+                        ggml_q3_hifi_set_tensor_outliers_local(q4_outliers);
+                    }
 
                     new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
                 }
