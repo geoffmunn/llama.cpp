@@ -2804,12 +2804,16 @@ struct ggml_cplan ggml_graph_plan(
                     {
                         if (ggml_is_quantized(node->src[0]->type)) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
+                        } else {
+                            cur = 0;
                         }
                     } break;
                 case GGML_OP_ACC:
                     {
                         if (ggml_is_quantized(node->src[0]->type)) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[1]->ne[0] * n_tasks;
+                        } else {
+                            cur = 0;
                         }
                     } break;
                 case GGML_OP_COUNT_EQUAL:
@@ -2847,6 +2851,8 @@ struct ggml_cplan ggml_graph_plan(
                     {
                         if (ggml_is_quantized(node->src[0]->type)) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
+                        } else {
+                            cur = 0;
                         }
                     } break;
                 case GGML_OP_SOFT_MAX:
