@@ -1286,3 +1286,30 @@ void quantize_row_iq4_xs(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
     assert(k % QK_K == 0);
     quantize_iq4_xs(x, y, 1, k, NULL);
 }
+
+void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                                   const void * GGML_RESTRICT vx, size_t bx,
+                                   const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+    const block_q3_k_hifi * bx_hifi = (const block_q3_k_hifi *)vx;
+    const block_q8_K       * by_q8  = (const block_q8_K *)vy;
+    float result = 0.0f;
+    for (int i = 0; i < nb; i++) {
+        float block_dot = 0.0f;
+        ggml_vec_dot_q3_K_q8_K(QK_K, &block_dot, sizeof(float),
+                                bx_hifi[i].q3_k_data, sizeof(block_q3_K),
+                                &by_q8[i], sizeof(block_q8_K), 1);
+        result += block_dot;
+        // block_q3_k_hifi has no outlier_count. Break on FP16-zero sentinel.
+        const float q8d = by_q8[i].d;
+        for (int j = 0; j < Q3_K_HIFI_OUTLIERS; j++) {
+            ggml_half oval = bx_hifi[i].outliers[j];
+            if (oval == 0) break;  // FP16-zero sentinel (ggml_half = uint16_t on CPU)
+            const int pos = (int)bx_hifi[i].outlier_idx[j];
+            result += GGML_FP16_TO_FP32(oval)
+                    * (q8d * (float)by_q8[i].qs[pos]);
+        }
+    }
+    *s = result;
+}
