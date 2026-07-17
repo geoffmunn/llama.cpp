@@ -132,6 +132,7 @@ ggml_q3_hifi_size_category ggml_q3_hifi_get_size_category(float model_params_b) 
 
 int ggml_q3_hifi_compute_block_outliers(float block_outlier_ratio,
                                          int base_outlier_count, float model_params_b) {
+    (void)model_params_b;
     int extra = (int)(block_outlier_ratio * (float)Q3_K_HIFI_MAX_OUTLIERS);
     int total = base_outlier_count + extra;
     return total > Q3_K_HIFI_MAX_OUTLIERS ? Q3_K_HIFI_MAX_OUTLIERS : total;
@@ -217,7 +218,7 @@ void ggml_q6_k_hifi_res8_select_top_n(const float * GGML_RESTRICT err,
 
     for (int64_t j = 0; j < k; ++j) {
         candidates[j].idx = (int)j;
-        candidates[j].score = fabs((double)err[j]) * imatrix_importance[j];
+        candidates[j].score = fabsf(err[j]) * imatrix_importance[j];
     }
 
     /* Partial sort: bubble the top max_outliers to the front */
@@ -265,8 +266,8 @@ void ggml_q6_k_hifi_res8_compute_shared_scale(const float * GGML_RESTRICT err,
 
     float max_abs_err = 0.0f;
     for (int i = 0; i < actual_count; ++i) {
-        float abs_err = fabs((double)err[outlier_idx[i]]);
-        if (fabs((double)abs_err) > max_abs_err) {
+        float abs_err = fabsf(err[outlier_idx[i]]);
+        if (fabsf(abs_err) > max_abs_err) {
             max_abs_err = abs_err;
         }
     }
