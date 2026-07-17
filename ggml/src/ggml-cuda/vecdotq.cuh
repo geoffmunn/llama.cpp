@@ -866,7 +866,7 @@ static __device__ __forceinline__ float vec_dot_q3_k_hifi_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
     const block_q3_k_hifi * bq = (const block_q3_k_hifi *) vbq + kbx;
-    const block_q3_K * q3k = (const block_q3_K *)bq->q3_k_data;
+    const block_q3_K * q3k = &bq->base;
 
     const int bq8_offset = QR3_K * (iqs / (QI3_K/2));
     const int scale_offset = iqs - iqs % QI8_1 + (iqs % QI8_1) / (QI8_1/2);
@@ -1024,9 +1024,8 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
 static __device__ __forceinline__ float vec_dot_q6k_hifi_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
-    // Cast to block_q6_k_hifi (222 bytes) instead of block_q6_K (210 bytes)
-    // to fix stride bug — base Q6_K fields are layout-compatible
-    const block_q6_k_hifi * bq6 = (const block_q6_k_hifi *) vbq + kbx;
+    // Use block_q6_K fields directly; stride handled by byte offset
+    const block_q6_K * bq6 = (const block_q6_K *) ((const uint8_t *) vbq + kbx * sizeof(block_q6_k_hifi_res8));
 
     const int bq8_offset = 2 * QR6_K * (iqs / (QI6_K/2)) + (iqs % (QI6_K/2)) / (QI6_K/4);
     const int scale_offset = (QI6_K/4) * (iqs / (QI6_K/2)) + (iqs % (QI6_K/2)) / (QI6_K/8);
