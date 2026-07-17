@@ -235,8 +235,6 @@ static __device__ void dequantize_block_q4_K_device(const void * __restrict__ vx
 
 template<typename dst_t>
 static __global__ void dequantize_block_q4_K(const void * __restrict__ vx, dst_t * __restrict__ yy) {
-    const block_q4_K * x = (const block_q4_K *) vx;
-
     const int64_t i = blockIdx.x;
     dequantize_block_q4_K_device<dst_t>(vx, yy, i);
 }
