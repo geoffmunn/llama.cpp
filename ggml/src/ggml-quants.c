@@ -727,7 +727,7 @@ static float make_qkx1_quants(int n, int nmax, const float * GGML_RESTRICT x, ui
         scale = sumlx/suml2;
         float sum = 0;
         for (int i = 0; i < n; ++i) {
-            sum += (double)x[i] - (double)scale*(double)L[i];
+            sum += x[i] - scale*L[i];
         }
         min = alpha*min + (1 - alpha)*sum/n;
         if (min > 0) min = 0;
@@ -6046,6 +6046,39 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_nl, data, nb);
             } break;
 
+        case GGML_TYPE_Q2_K_HIFI:
+            {
+                const block_q2_k_hifi * q = (const block_q2_k_hifi *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (!validate_fp16(q[i].base.d, i) || !validate_fp16(q[i].base.dmin, i)) {
+                        return false;
+                    }
+                }
+            } break;
+        case GGML_TYPE_Q3_K_HIFI:
+            {
+                const block_q3_k_hifi * q = (const block_q3_k_hifi *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (!validate_fp16(q[i].base.d, i)) {
+                        return false;
+                    }
+                }
+            } break;
+        case GGML_TYPE_Q4_K_HIFI:
+            {
+                const block_q4_k_hifi * q = (const block_q4_k_hifi *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (!validate_fp16(q[i].base.d, i) || !validate_fp16(q[i].base.dmin, i)) {
+                        return false;
+                    }
+                }
+            } break;
+        case GGML_TYPE_Q3_K_LITE:
+        case GGML_TYPE_Q4_K_LITE:
+        case GGML_TYPE_Q5_K_LITE:
+        case GGML_TYPE_Q6_K_LITE:
+            // lite variants reuse standard K-block layouts — no extra validation needed
+            break;
         case GGML_TYPE_I8:
         case GGML_TYPE_I16:
         case GGML_TYPE_I32:

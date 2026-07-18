@@ -161,9 +161,7 @@ static __global__ void dequantize_block_q2_K(const void * __restrict__ vx, dst_t
 }
 
 template<typename dst_t>
-static __global__ void dequantize_block_q3_K(const void * __restrict__ vx, dst_t * __restrict__ yy) {
-
-    const int64_t i = blockIdx.x;
+static __device__ void dequantize_block_q3_K_device(const void * __restrict__ vx, dst_t * __restrict__ yy, const int64_t i) {
     const block_q3_K * x = (const block_q3_K *) vx;
 
     const int64_t r = threadIdx.x/4;
@@ -191,6 +189,12 @@ static __global__ void dequantize_block_q3_K(const void * __restrict__ vx, dst_t
     for (int l = l0; l < l0+4; ++l) y[l] = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
 }
 
+template<typename dst_t>
+static __global__ void dequantize_block_q3_K(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i = blockIdx.x;
+    dequantize_block_q3_K_device<dst_t>(vx, yy, i);
+}
+
 static inline __device__ void get_scale_min_k4(int j, const uint8_t * q, uint8_t & d, uint8_t & m) {
     if (j < 4) {
         d = q[j] & 63; m = q[j + 4] & 63;
@@ -201,10 +205,8 @@ static inline __device__ void get_scale_min_k4(int j, const uint8_t * q, uint8_t
 }
 
 template<typename dst_t>
-static __global__ void dequantize_block_q4_K(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+static __device__ void dequantize_block_q4_K_device(const void * __restrict__ vx, dst_t * __restrict__ yy, const int64_t i) {
     const block_q4_K * x = (const block_q4_K *) vx;
-
-    const int64_t i = blockIdx.x;
 
     // assume 32 threads
     const int64_t tid = threadIdx.x;
@@ -229,6 +231,12 @@ static __global__ void dequantize_block_q4_K(const void * __restrict__ vx, dst_t
         y[l + 0] = d1 * (q[l] & 0xF) - m1;
         y[l +32] = d2 * (q[l] >>  4) - m2;
     }
+}
+
+template<typename dst_t>
+static __global__ void dequantize_block_q4_K(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i = blockIdx.x;
+    dequantize_block_q4_K_device<dst_t>(vx, yy, i);
 }
 
 template<typename dst_t>
@@ -554,7 +562,7 @@ static __global__ void dequantize_block_q3_k_hifi(const void * __restrict__ vx, 
     const block_q3_k_hifi * x = (const block_q3_k_hifi *) vx;
 
     // Dequantize the base Q3_K portion
-    dequantize_block_q3_K<dst_t>(vx, yy);
+    dequantize_block_q3_K_device<dst_t>(vx, yy, i);
 
     // Replace outlier positions with FP16 values
     dst_t * yb = yy + i * QK_K;
@@ -580,7 +588,7 @@ static __global__ void dequantize_block_q4_k_hifi(const void * __restrict__ vx, 
     const block_q4_k_hifi * x = (const block_q4_k_hifi *) vx;
 
     // Dequantize the base Q4_K portion
-    dequantize_block_q4_K<dst_t>(vx, yy);
+    dequantize_block_q4_K_device<dst_t>(vx, yy, i);
 
     // Replace outlier positions with FP16 values
     dst_t * yb = yy + i * QK_K;

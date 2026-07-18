@@ -49,7 +49,7 @@ static float ggml_hifi_compute_tensor_importance_local(const float * imatrix_dat
     return 1.0f / (1.0f + expf(-mean));
 }
 
-static int ggml_q4_hifi_get_max_outliers_local(float model_params_b) {
+static int ggml_q4_hifi_get_max_outliers_local(float /*model_params_b*/) {
     // Return Q4_K_HIFI_MAX_OUTLIERS for all model sizes (conservative default)
     return Q4_K_HIFI_MAX_OUTLIERS;
 }
@@ -89,8 +89,7 @@ struct tensor_importance_entry {
     bool is_candidate;  // input projection (not o_proj / down_proj)
 };
 static std::map<std::string, float> g_tensor_importance_map;
-static float g_importance_threshold = 0.0f;
-static bool  g_imatrix_guided_enabled = false;
+
 
 // result of parsing --tensor-type option
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
@@ -924,6 +923,22 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ3_S:
         case LLAMA_FTYPE_MOSTLY_IQ3_M:   return GGML_TYPE_IQ3_S;
 
+        // HIFI/LITE quants
+        case LLAMA_FTYPE_MOSTLY_Q4_K_HIFI:     return GGML_TYPE_Q4_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_HIFI:     return GGML_TYPE_Q3_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_HIFI:     return GGML_TYPE_Q5_K_HIFI_RES8;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_HIFI:     return GGML_TYPE_Q2_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_LITE:     return GGML_TYPE_Q2_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_LITE:     return GGML_TYPE_Q3_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_LITE:     return GGML_TYPE_Q4_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_LITE:     return GGML_TYPE_Q5_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_LITE:     return GGML_TYPE_Q6_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_HIFI:     return GGML_TYPE_Q6_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_HIFI_RES8: return GGML_TYPE_Q6_K_HIFI_RES8;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_HIFI_DYNAMIC: return GGML_TYPE_Q6_K_HIFI_DYNAMIC;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_HIFI_RES8: return GGML_TYPE_Q3_K_HIFI_RES8;
+        case LLAMA_FTYPE_MOSTLY_NVFP4:         return GGML_TYPE_NVFP4;
+
         default: return GGML_TYPE_COUNT;
     }
 }
@@ -1238,7 +1253,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const ggml_type cur_type = tensor->type;
         const ggml_type new_type = tm.target_type;
 
-        ggml_hifi_quant_context hifi_ctx = {};
+
         const ggml_hifi_quant_context * hifi_ctx_ptr = nullptr;
 
         // If we've decided to quantize to the same type the tensor is already

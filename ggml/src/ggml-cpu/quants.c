@@ -1290,6 +1290,7 @@ void quantize_row_iq4_xs(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
 void ggml_vec_dot_q3_k_hifi_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
                                    const void * GGML_RESTRICT vx, size_t bx,
                                    const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    (void)bs; (void)bx; (void)by; (void)nrc;
     assert(n % QK_K == 0);
     const int nb = n / QK_K;
     const block_q3_k_hifi * bx_hifi = (const block_q3_k_hifi *)vx;

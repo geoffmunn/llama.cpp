@@ -14,12 +14,12 @@
 static std::atomic<bool> g_worker_thread_active{false};
 
 /// Call before spawning worker threads (main thread side).
-void ggml_quantization_enter_workers() {
+static void ggml_quantization_enter_workers() {
     g_worker_thread_active.store(true);
 }
 
 /// Call after all worker threads have joined (main thread side).
-void ggml_quantization_exit_workers() {
+static void ggml_quantization_exit_workers() {
     g_worker_thread_active.store(false);
 }
 
@@ -47,7 +47,7 @@ static constexpr int kTinyWorkerOutliers = 8;
 /// \param small_limit     Configured small-limit value for TINY models
 ///                        (typically 2; see guide §7).
 /// \return                Effective outlier count.
-int ggml_q3_hifi_get_max_outliers(float model_params_b, int small_limit) {
+static int ggml_q3_hifi_get_max_outliers(float model_params_b, int small_limit) {
     if (model_params_b < 2.0f) {
         // TINY model
         if (is_quantization_worker_thread()) {

@@ -68,6 +68,23 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q5_K_M",   LLAMA_FTYPE_MOSTLY_Q5_K_M,   " 5.33G, +0.0569 ppl @ Llama-3-8B",  },
     { "Q6_K",     LLAMA_FTYPE_MOSTLY_Q6_K,     " 6.14G, +0.0217 ppl @ Llama-3-8B",  },
     { "Q8_0",     LLAMA_FTYPE_MOSTLY_Q8_0,     " 7.96G, +0.0026 ppl @ Llama-3-8B",  },
+    // HIFI quants
+    { "Q4_K_HIFI",    LLAMA_FTYPE_MOSTLY_Q4_K_HIFI,    " Q4_K HIFI",               },
+    { "Q3_K_HIFI",    LLAMA_FTYPE_MOSTLY_Q3_K_HIFI,    " Q3_K HIFI",               },
+    { "Q5_K_HIFI",    LLAMA_FTYPE_MOSTLY_Q5_K_HIFI,    " Q5_K HIFI",               },
+    { "Q2_K_HIFI",    LLAMA_FTYPE_MOSTLY_Q2_K_HIFI,    " Q2_K HIFI",               },
+    // LITE quants
+    { "Q2_K_LITE",    LLAMA_FTYPE_MOSTLY_Q2_K_LITE,    " Q2_K LITE",               },
+    { "Q3_K_LITE",    LLAMA_FTYPE_MOSTLY_Q3_K_LITE,    " Q3_K LITE",               },
+    { "Q4_K_LITE",    LLAMA_FTYPE_MOSTLY_Q4_K_LITE,    " Q4_K LITE",               },
+    { "Q5_K_LITE",    LLAMA_FTYPE_MOSTLY_Q5_K_LITE,    " Q5_K LITE",               },
+    { "Q6_K_LITE",    LLAMA_FTYPE_MOSTLY_Q6_K_LITE,    " Q6_K LITE",               },
+    // additional HIFI quants
+    { "Q6_K_HIFI",        LLAMA_FTYPE_MOSTLY_Q6_K_HIFI,        " Q6_K HIFI",                   },
+    { "Q6_K_HIFI_RES8",   LLAMA_FTYPE_MOSTLY_Q6_K_HIFI_RES8,   " Q6_K HIFI RES8",              },
+    { "Q6_K_HIFI_DYNAMIC",LLAMA_FTYPE_MOSTLY_Q6_K_HIFI_DYNAMIC," Q6_K HIFI DYNAMIC",           },
+    { "Q3_K_HIFI_RES8",   LLAMA_FTYPE_MOSTLY_Q3_K_HIFI_RES8,   " Q3_K HIFI RES8",              },
+    // standard
     { "F16",      LLAMA_FTYPE_MOSTLY_F16,      "14.00G, +0.0020 ppl @ Mistral-7B",  },
     { "BF16",     LLAMA_FTYPE_MOSTLY_BF16,     "14.00G, -0.0050 ppl @ Mistral-7B",  },
     { "F32",      LLAMA_FTYPE_ALL_F32,         "26.00G              @ 7B",          },
