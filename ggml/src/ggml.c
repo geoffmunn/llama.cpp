@@ -7808,6 +7808,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q2_K_HIFI:  result = quantize_q2_k_hifi(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q2_K_LITE:  result = quantize_q2_k_lite(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_K_HIFI:  result = quantize_q4_k_hifi(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q3_K_HIFI:  result = quantize_q3_k_hifi(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q3_K_LITE:  result = quantize_q3klite(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_K_LITE:  result = quantize_q4klite(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_K_LITE:  result = quantize_q5klite(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
