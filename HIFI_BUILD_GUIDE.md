@@ -1,9 +1,11 @@
 # Requirements
 
-transformers: pip install transformers
-torch: pip install torch
-huggingface-cli: curl -LsSf https://hf.co/cli/install.sh | bash
-sentencepiece: pip install sentencepiece
+transformers: pip install transformers 
+torch: pip install torch 
+numpy: pip install numpy 
+yaml: pip install yaml 
+huggingface-cli: curl -LsSf https://hf.co/cli/install.sh | bash 
+sentencepiece: pip install sentencepiece 
 
 # How to build a HIFI model
 
