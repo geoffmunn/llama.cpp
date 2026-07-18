@@ -923,6 +923,22 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ3_S:
         case LLAMA_FTYPE_MOSTLY_IQ3_M:   return GGML_TYPE_IQ3_S;
 
+        // HIFI/LITE quants
+        case LLAMA_FTYPE_MOSTLY_Q4_K_HIFI:     return GGML_TYPE_Q4_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_HIFI:     return GGML_TYPE_Q3_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_HIFI:     return GGML_TYPE_Q5_K_HIFI_RES8;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_HIFI:     return GGML_TYPE_Q2_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_LITE:     return GGML_TYPE_Q2_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_LITE:     return GGML_TYPE_Q3_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_LITE:     return GGML_TYPE_Q4_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_LITE:     return GGML_TYPE_Q5_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_LITE:     return GGML_TYPE_Q6_K_LITE;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_HIFI:     return GGML_TYPE_Q6_K_HIFI;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_HIFI_RES8: return GGML_TYPE_Q6_K_HIFI_RES8;
+        case LLAMA_FTYPE_MOSTLY_Q6_K_HIFI_DYNAMIC: return GGML_TYPE_Q6_K_HIFI_DYNAMIC;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_HIFI_RES8: return GGML_TYPE_Q3_K_HIFI_RES8;
+        case LLAMA_FTYPE_MOSTLY_NVFP4:         return GGML_TYPE_NVFP4;
+
         default: return GGML_TYPE_COUNT;
     }
 }
